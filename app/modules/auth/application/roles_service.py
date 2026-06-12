@@ -76,12 +76,14 @@ class RoleService:
 
     async def update(self, role_id: int, data: RoleUpdate, actor: CurrentUser) -> Role:
         role = await self.get(role_id)
-        if role.name in SYSTEM_ROLE_NAMES:
-            raise SystemRoleError(
-                f"Role '{role.name}' is a system role and cannot be modified"
-            )
         changes = data.model_dump(exclude_unset=True)
-        if "name" in changes and changes["name"] != role.name:
+        if role.name in SYSTEM_ROLE_NAMES:
+            # System roles cannot be renamed or deleted, but other fields (e.g. description) may pass through unchanged.
+            if "name" in changes and changes["name"] != role.name:
+                raise SystemRoleError(
+                    f"Role '{role.name}' is a system role and cannot be renamed"
+                )
+        elif "name" in changes and changes["name"] != role.name:
             await self._check_name_unique(changes["name"], exclude_id=role_id)
         changes["updated_by"] = actor.user_id
         changes["ip_updated"] = actor.ip
