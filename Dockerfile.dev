@@ -1,0 +1,21 @@
+FROM python:3.12-slim
+
+# Install uv from the official distroless image.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Copy dependency manifest first — leverages Docker layer cache.
+# Dependencies are installed at container startup (entrypoint.sh) so the
+# .venv volume is populated with Linux-compatible binaries.
+COPY pyproject.toml uv.lock ./
+
+# Copy the rest of the source (overridden by the dev volume mount, but needed
+# for the image to be self-contained).
+COPY . .
+
+RUN chmod +x entrypoint.sh
+
+EXPOSE 8000
+
+ENTRYPOINT ["./entrypoint.sh"]
