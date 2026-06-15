@@ -24,6 +24,7 @@ class VacancyExpanded:
     id: int
     vacancy_name: str
     client_company: str
+    contact_id: int
     contact: str
     department: str
     process: str
@@ -75,6 +76,7 @@ class VacanciesExpandedRepository:
                 Vacancy.id,
                 VacancyName.name.label("vacancy_name"),
                 ClientCompany.name.label("client_company"),
+                Vacancy.contact_id,
                 func.concat(Contact.first_name, " ", Contact.last_name).label("contact"),
                 Department.name.label("department"),
                 Process.name.label("process"),
@@ -140,6 +142,7 @@ class VacanciesExpandedRepository:
                 Vacancy.id,
                 VacancyName.name.label("vacancy_name"),
                 ClientCompany.name.label("client_company"),
+                Vacancy.contact_id,
                 func.concat(Contact.first_name, " ", Contact.last_name).label("contact"),
                 Department.name.label("department"),
                 Process.name.label("process"),

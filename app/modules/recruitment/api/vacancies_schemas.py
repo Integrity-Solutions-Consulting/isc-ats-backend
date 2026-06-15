@@ -69,6 +69,7 @@ class VacancyListItem(BaseModel):
     id: int
     vacancy_name: str
     client_company: str
+    contact_id: int
     contact: str
     department: str
     process: str
