@@ -89,6 +89,32 @@ class NotificationService:
             await self.repository.session.refresh(n)
         return n
 
+    async def count_unread(self, recipient_id: int) -> int:
+        """Number of active, unread notifications addressed to a recipient."""
+        stmt = (
+            select(func.count())
+            .select_from(Notification)
+            .where(Notification.is_active.is_(True))
+            .where(Notification.recipient_id == recipient_id)
+            .where(Notification.read_at.is_(None))
+        )
+        return (await self.repository.session.execute(stmt)).scalar_one()
+
+    async def mark_read_for_recipient(
+        self, notification_id: int, recipient_id: int
+    ) -> Notification:
+        """Mark a notification read only if it belongs to `recipient_id`.
+
+        Raises NotificationNotFoundError when the notification is missing OR
+        owned by another user — existence is never leaked across recipients.
+        """
+        n = await self.get(notification_id)
+        if n.recipient_id != recipient_id:
+            raise NotificationNotFoundError(
+                f"Notification {notification_id} not found"
+            )
+        return await self.mark_read(notification_id)
+
     async def delete(self, notification_id: int) -> None:
         n = await self.get(notification_id)
         await self.repository.soft_delete(n)

@@ -29,3 +29,9 @@ class NotificationRead(BaseModel):
     is_active: bool
     created_at: datetime
     created_by: int | None
+
+
+class UnreadCountRead(BaseModel):
+    """Unread-notification count for the authenticated user's bell badge."""
+
+    count: int

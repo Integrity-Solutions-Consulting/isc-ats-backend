@@ -1,7 +1,7 @@
 from datetime import datetime, time
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Identity, String, Text, Time
+from sqlalchemy import DateTime, ForeignKey, Identity, Integer, String, Text, Time
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,7 +17,8 @@ class InterviewerAvailability(Base, AuditMixin, SoftDeleteMixin):
     """recruitment.interviewer_availability — a weekly availability window.
 
     `day_of_week` 0-6, with a recurring [start_time, end_time] slotted into
-    `slot_duration_min` chunks for scheduling.
+    `slot_duration_min` chunks for scheduling. `buffer_min` is added between
+    consecutive slots (dead time for breaks/preparation).
     """
 
     __tablename__ = "interviewer_availability"
@@ -29,6 +30,7 @@ class InterviewerAvailability(Base, AuditMixin, SoftDeleteMixin):
     start_time: Mapped[time] = mapped_column(Time)
     end_time: Mapped[time] = mapped_column(Time)
     slot_duration_min: Mapped[int] = mapped_column(default=60)
+    buffer_min: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Interview(Base, AuditMixin, SoftDeleteMixin):
@@ -37,6 +39,10 @@ class Interview(Base, AuditMixin, SoftDeleteMixin):
     `status_id` is an interview_status parameter; `scheduled_by_id` an
     interview_scheduler parameter (hr | candidate), NOT a user. `offered_slots`
     (jsonb) holds the candidate-facing slot options for self-scheduling.
+
+    `scheduled_at` and `ends_at` are nullable to support Mode B (candidate
+    self-scheduling) where they are only set after the candidate confirms a slot.
+    `token_expires_at` holds the expiry for `slot_selection_token`.
     """
 
     __tablename__ = "interviews"
@@ -48,11 +54,12 @@ class Interview(Base, AuditMixin, SoftDeleteMixin):
     )
     process_stage_id: Mapped[int] = mapped_column(_fk("org.process_stages.id"))
     interviewer_id: Mapped[int] = mapped_column(_fk("auth.users.id"))
-    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     extra_email: Mapped[str | None] = mapped_column(String(255), default=None)
     offered_slots: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, default=None)
     slot_selection_token: Mapped[str | None] = mapped_column(String(64), default=None)
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     teams_meeting_url: Mapped[str | None] = mapped_column(String(500), default=None)
     teams_meeting_id: Mapped[str | None] = mapped_column(String(200), default=None)
     status_id: Mapped[int] = mapped_column(_fk("org.parameters.id"))

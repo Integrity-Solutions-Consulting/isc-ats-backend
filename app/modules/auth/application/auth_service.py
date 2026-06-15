@@ -10,10 +10,9 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    hash_password,
     hash_token,
     verify_password,
-    hash_password,
-    create_verification_token,
 )
 from app.modules.auth.application.bootstrap_service import CANDIDATE_ROLE_NAME
 from app.modules.auth.infrastructure.models import RefreshToken, Role, User, UserRole
@@ -167,7 +166,9 @@ class AuthService:
             email=email,
             password_hash=hashed,
             portal_id=portal.id,
-            email_verified=True,  # Verified immediately!
+            # Activated only after the candidate clicks the verification link sent
+            # by email; login rejects unverified accounts (EmailNotVerifiedError).
+            email_verified=False,
             must_change_password=False,
             created_by=None,
             ip_created=ip,
@@ -187,6 +188,17 @@ class AuthService:
         await self.users.session.flush()
 
         return new_user
+
+    async def get_unverified_user(self, email: str) -> User | None:
+        """Return the user for `email` only if it exists and is not yet verified.
+
+        Used by the resend-verification flow. Returns None otherwise so the caller
+        can answer generically without revealing whether the email is registered.
+        """
+        user = await self.users.get_by_email(email)
+        if user is None or user.email_verified:
+            return None
+        return user
 
     async def deactivate_user(self, user_id: int) -> None:
         """Set the user inactive and revoke all their active refresh tokens.

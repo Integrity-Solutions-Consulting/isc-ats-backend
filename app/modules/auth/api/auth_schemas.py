@@ -33,3 +33,7 @@ class RegisterRequest(BaseModel):
 class VerifyRequest(BaseModel):
     token: str
 
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+

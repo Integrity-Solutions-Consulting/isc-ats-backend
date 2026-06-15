@@ -47,6 +47,34 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # Email
+    # Active transport: "smtp" (Gmail today) or "resend" (future — requires a
+    # DNS-verified sending domain). The business code depends on the EmailSender
+    # port, so switching is a one-variable change.
+    email_provider: str = "smtp"
+    # Public base URL of the frontend, used to build links inside emails (e.g. the
+    # account-verification link points at {frontend_base_url}/api/auth/verify). No trailing slash.
+    frontend_base_url: str = "http://localhost:3000"
+    # Sender identity shown to recipients.
+    email_sender_name: str = "Integrity Solutions"
+    email_sender_email: str = ""
+    # SMTP transport (Gmail by default). `smtp_password` is a Gmail app-password.
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    # Resend transport (future). Set EMAIL_PROVIDER=resend once the domain is verified.
+    resend_api_key: str = ""
+
+    # Meetings (Teams via Microsoft Graph)
+    # "disabled" (default, safe) or "graph". When "graph", the three azure_* values
+    # below are required (Azure AD app with OnlineMeetings.ReadWrite.All + a Teams
+    # application access policy authorizing the organizer).
+    meetings_provider: str = "disabled"
+    azure_tenant_id: str = ""
+    azure_client_id: str = ""
+    azure_client_secret: str = ""
+
     # CORS — NoDecode so a comma-separated env string isn't JSON-parsed by the source
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000"]

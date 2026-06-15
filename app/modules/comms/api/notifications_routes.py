@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.modules.auth.api.authorization import require_permission
 from app.modules.auth.infrastructure.models import User
-from app.modules.comms.api.notifications_schemas import NotificationCreate, NotificationRead
+from app.modules.comms.api.notifications_schemas import (
+    NotificationCreate,
+    NotificationRead,
+    UnreadCountRead,
+)
 from app.modules.comms.application.notifications_service import (
     NotificationNotFoundError,
     NotificationReferenceError,
@@ -51,6 +55,54 @@ async def list_notifications(
         unread_only=unread_only,
     )
     return Page.create([NotificationRead.model_validate(i) for i in items], total, params)
+
+
+# ── Self-service (any authenticated user — scoped to their own rows) ───────────
+
+
+@router.get("/me", response_model=Page[NotificationRead])
+async def list_my_notifications(
+    service: ServiceDep,
+    current_user: CurrentUserDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+    unread_only: Annotated[bool, Query()] = False,
+) -> Page[NotificationRead]:
+    """The authenticated user's own notifications.
+
+    No staff permission required — always scoped to recipient_id == current_user.
+    """
+    params = PageParams(page=page, size=size)
+    items, total = await service.list(
+        params, recipient_id=current_user.user_id, unread_only=unread_only
+    )
+    return Page.create([NotificationRead.model_validate(i) for i in items], total, params)
+
+
+@router.get("/me/unread-count", response_model=UnreadCountRead)
+async def my_unread_count(
+    service: ServiceDep, current_user: CurrentUserDep
+) -> UnreadCountRead:
+    """Unread count for the authenticated user (bell badge)."""
+    return UnreadCountRead(count=await service.count_unread(current_user.user_id))
+
+
+@router.patch("/me/{notification_id}/read", response_model=NotificationRead)
+async def mark_my_notification_read(
+    notification_id: int, service: ServiceDep, current_user: CurrentUserDep
+) -> NotificationRead:
+    """Mark one of the authenticated user's notifications read.
+
+    Returns 404 when the notification is missing OR owned by another user.
+    """
+    try:
+        return NotificationRead.model_validate(
+            await service.mark_read_for_recipient(
+                notification_id, current_user.user_id
+            )
+        )
+    except NotificationNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
 
 @router.get(

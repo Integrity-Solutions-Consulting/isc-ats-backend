@@ -8,6 +8,9 @@ class AvailabilityBase(BaseModel):
     start_time: time
     end_time: time
     slot_duration_min: int = Field(default=60, ge=1)
+    buffer_min: int = Field(
+        default=0, ge=0, description="Dead time (minutes) added between consecutive slots"
+    )
 
 
 class AvailabilityCreate(AvailabilityBase):
@@ -19,6 +22,7 @@ class AvailabilityUpdate(BaseModel):
     start_time: time | None = None
     end_time: time | None = None
     slot_duration_min: int | None = Field(default=None, ge=1)
+    buffer_min: int | None = Field(default=None, ge=0)
 
 
 class AvailabilityRead(AvailabilityBase):

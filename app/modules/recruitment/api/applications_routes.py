@@ -1,11 +1,20 @@
+import io
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-import io
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import CurrentUserDep, SessionDep
+from app.core.database import async_session_factory
+from app.core.dependencies import CurrentUser, CurrentUserDep, SessionDep
+from app.modules.ai.application.analysis_service import analyze_application
+from app.modules.ai.application.word_generator_service import generate_profile_word
 from app.modules.auth.api.authorization import require_permission
+from app.modules.auth.infrastructure.models import User
+from app.modules.comms.application.email_dispatch_service import EmailDispatchService
+from app.modules.comms.application.email_sender import EmailMessage
+from app.modules.comms.application.email_templates import render_stage_change_email
+from app.modules.comms.infrastructure.email_sender_factory import build_email_sender
 from app.modules.org.infrastructure.models import Parameter, ProcessStage
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.applications_schemas import (
@@ -19,24 +28,23 @@ from app.modules.recruitment.application.applications_service import (
     ApplicationService,
     DuplicateApplicationError,
 )
-from app.modules.recruitment.infrastructure.application_models import ApplicationDocument
+from app.modules.recruitment.infrastructure.application_models import (
+    Application,
+    ApplicationDocument,
+)
 from app.modules.recruitment.infrastructure.applications_repository import (
     ApplicationRepository,
 )
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
-from app.modules.recruitment.infrastructure.models import Vacancy
-from app.modules.ai.application.analysis_service import analyze_application
-from app.modules.ai.application.word_generator_service import generate_profile_word
 from app.modules.recruitment.infrastructure.candidates_repository import (
     CandidateRepository,
 )
+from app.modules.recruitment.infrastructure.models import Vacancy
 from app.modules.storage.infrastructure.minio_client import upload_file_to_minio
 from app.modules.storage.infrastructure.models import File
 from app.shared.ownership import is_candidate_portal, require_owner
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
-from app.core.dependencies import CurrentUser
-from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/applications", tags=["recruitment · applications"])
 
@@ -67,6 +75,50 @@ def get_service(session: SessionDep) -> ApplicationService:
 
 
 ServiceDep = Annotated[ApplicationService, Depends(get_service)]
+
+
+async def _send_stage_change_email(application_id: int, new_stage_id: int) -> None:
+    """Background task: notify the candidate that their application changed stage.
+
+    Opens its own DB session (the request session is already closed) and resolves
+    the candidate email plus the vacancy and stage names from their parameter
+    catalogs. Never propagates — a failed notification must not affect the move.
+    """
+    async with async_session_factory() as session:
+        try:
+            application = await BaseRepository(session, Application).get(application_id)
+            if application is None:
+                return
+            candidate = await BaseRepository(session, Candidate).get(
+                application.candidate_id
+            )
+            if candidate is None:
+                return
+            user = await BaseRepository(session, User).get(candidate.user_id)
+            vacancy = await BaseRepository(session, Vacancy).get(application.vacancy_id)
+            stage = await BaseRepository(session, ProcessStage).get(new_stage_id)
+            if user is None or vacancy is None or stage is None:
+                return
+            params = ParameterRepository(session)
+            vacancy_name = await params.get(vacancy.vacancy_name_id)
+            stage_name = await params.get(stage.stage_id)
+            if vacancy_name is None or stage_name is None:
+                return
+            rendered = render_stage_change_email(
+                candidate.first_name, vacancy_name.name, stage_name.name
+            )
+            dispatch = EmailDispatchService(session, build_email_sender())
+            await dispatch.send(
+                EmailMessage(
+                    to_email=user.email,
+                    subject=rendered.subject,
+                    html_body=rendered.html_body,
+                    text_body=rendered.text_body,
+                )
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
 
 
 @router.get(
@@ -150,13 +202,24 @@ async def update_application(
     data: ApplicationUpdate,
     service: ServiceDep,
     current_user: CurrentUserDep,
+    background_tasks: BackgroundTasks,
 ) -> ApplicationRead:
+    try:
+        existing = await service.get(application_id)
+    except ApplicationNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    old_stage_id = existing.current_stage_id
     try:
         updated = await service.update(application_id, data, current_user)
     except ApplicationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except ApplicationReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    # Notify the candidate only when the Kanban stage actually changed.
+    if updated.current_stage_id is not None and updated.current_stage_id != old_stage_id:
+        background_tasks.add_task(
+            _send_stage_change_email, updated.id, updated.current_stage_id
+        )
     return ApplicationRead.model_validate(updated)
 
 

@@ -164,6 +164,30 @@ async def test_create_availability_succeeds(session: AsyncSession) -> None:
     assert availability.slot_duration_min == 60
 
 
+async def test_create_availability_persists_buffer_min(session: AsyncSession) -> None:
+    user = await _make_user(session)
+    svc = _availability_service(session)
+    with_buffer = await svc.create(
+        AvailabilityCreate(
+            user_id=user.id,
+            day_of_week=1,
+            start_time=time(9, 0),
+            end_time=time(17, 0),
+            buffer_min=10,
+        ),
+        ACTOR,
+    )
+    assert with_buffer.buffer_min == 10
+
+    default_buffer = await svc.create(
+        AvailabilityCreate(
+            user_id=user.id, day_of_week=2, start_time=time(9, 0), end_time=time(17, 0)
+        ),
+        ACTOR,
+    )
+    assert default_buffer.buffer_min == 0
+
+
 async def test_create_availability_rejects_inverted_window(session: AsyncSession) -> None:
     user = await _make_user(session)
     with pytest.raises(AvailabilityValidationError):

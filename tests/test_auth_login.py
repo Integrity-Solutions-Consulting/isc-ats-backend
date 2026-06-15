@@ -111,6 +111,16 @@ async def test_register_candidate_assigns_candidate_role(session: AsyncSession) 
     assert assigned is not None, "candidate role must be assigned on registration"
 
 
+async def test_register_candidate_starts_unverified(session: AsyncSession) -> None:
+    """Registration must leave the account unverified until the email link is clicked."""
+    await _bootstrap_candidate_role(session)
+    email = f"cand-{uuid.uuid4().hex[:10]}@test.local"
+
+    user = await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
+
+    assert user.email_verified is False
+
+
 async def test_register_candidate_raises_when_role_is_missing(session: AsyncSession) -> None:
     """If the candidate role was never bootstrapped, register_candidate must raise AuthError."""
     # The shared dev database may already hold a bootstrapped candidate role;

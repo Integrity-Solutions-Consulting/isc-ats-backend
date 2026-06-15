@@ -149,6 +149,16 @@ async def seed(session: AsyncSession) -> None:
     await get_or_create_param(session, type_="template_item_category", code="skills", name="Habilidades")
     await get_or_create_param(session, type_="template_item_category", code="certifications", name="Certificaciones")
 
+    # Interview statuses
+    await get_or_create_param(session, type_="interview_status", code="scheduled", name="Agendada")
+    await get_or_create_param(session, type_="interview_status", code="offered", name="Ofrecida")
+    await get_or_create_param(session, type_="interview_status", code="confirmed", name="Confirmada")
+    await get_or_create_param(session, type_="interview_status", code="cancelled", name="Cancelada")
+    await get_or_create_param(session, type_="interview_status", code="completed", name="Completada")
+
+    # Interview schedulers
+    await get_or_create_param(session, type_="interview_scheduler", code="hr", name="RH")
+    await get_or_create_param(session, type_="interview_scheduler", code="candidate", name="Candidato")
 
     # Careers
     sistemas = await get_or_create_param(session, type_="career", code="sistemas", name="Ing. en Sistemas / Software")

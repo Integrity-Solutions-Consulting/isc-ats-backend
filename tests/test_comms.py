@@ -130,6 +130,37 @@ async def test_list_notifications_unread_only(session: AsyncSession) -> None:
     assert items[0].id == n2.id
 
 
+async def test_count_unread_scoped_to_recipient(session: AsyncSession) -> None:
+    user = await _make_user(session)
+    other = await _make_user(session)
+    svc = _notif_service(session)
+    await svc.create(NotificationCreate(recipient_id=user.id, title="A"), ACTOR)
+    read = await svc.create(NotificationCreate(recipient_id=user.id, title="B"), ACTOR)
+    await svc.mark_read(read.id)
+    await svc.create(NotificationCreate(recipient_id=other.id, title="C"), ACTOR)
+
+    assert await svc.count_unread(user.id) == 1
+
+
+async def test_mark_read_for_recipient_marks_own(session: AsyncSession) -> None:
+    user = await _make_user(session)
+    svc = _notif_service(session)
+    n = await svc.create(NotificationCreate(recipient_id=user.id, title="Hi"), ACTOR)
+
+    marked = await svc.mark_read_for_recipient(n.id, user.id)
+    assert marked.read_at is not None
+
+
+async def test_mark_read_for_recipient_rejects_other_user(session: AsyncSession) -> None:
+    user = await _make_user(session)
+    other = await _make_user(session)
+    svc = _notif_service(session)
+    n = await svc.create(NotificationCreate(recipient_id=user.id, title="Hi"), ACTOR)
+
+    with pytest.raises(NotificationNotFoundError):
+        await svc.mark_read_for_recipient(n.id, other.id)
+
+
 # ── Email logs ─────────────────────────────────────────────────────────────────
 
 
