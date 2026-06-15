@@ -1,8 +1,11 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.core.security import create_verification_token
@@ -57,9 +60,12 @@ async def _send_verification_email(user_id: int, to_email: str) -> None:
     async with async_session_factory() as session:
         try:
             dispatch = EmailDispatchService(session, build_email_sender())
-            await dispatch.send(message)
+            success = await dispatch.send(message)
             await session.commit()
+            if not success:
+                logger.error("Verification email delivery failed for %s — check comms.email_logs", to_email)
         except Exception:
+            logger.exception("Unexpected error sending verification email to %s", to_email)
             await session.rollback()
 
 
