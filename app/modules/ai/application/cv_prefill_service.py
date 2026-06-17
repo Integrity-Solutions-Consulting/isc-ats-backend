@@ -19,7 +19,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 import fitz  # PyMuPDF
-from pypdf import PdfReader
+import pdfplumber
 from google import genai
 from google.genai import types
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,8 +104,8 @@ def _match_catalog(extracted: str | None, catalog: list[Parameter]) -> int | Non
 # ── PDF helpers (same pattern as cv_parse_service) ───────────────────────────
 
 def _extract_text(pdf_bytes: bytes) -> str:
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        return "\n".join(page.extract_text() or "" for page in pdf.pages).strip()
 
 
 def _pdf_to_images(pdf_bytes: bytes, dpi: int = 150) -> list[bytes]:
