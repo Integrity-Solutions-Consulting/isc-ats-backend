@@ -32,6 +32,7 @@ class CandidateExpanded:
     is_studying: bool
     is_working: bool
     current_company: str | None
+    degree_title: str | None
     cv_file_id: int | None
     avatar_file_id: int | None
     is_active: bool
@@ -70,6 +71,7 @@ class CandidatesExpandedRepository:
                 Candidate.is_studying,
                 Candidate.is_working,
                 Candidate.current_company,
+                Candidate.degree_title,
                 Candidate.cv_file_id,
                 Candidate.avatar_file_id,
                 Candidate.is_active,

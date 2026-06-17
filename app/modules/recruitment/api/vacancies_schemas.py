@@ -138,6 +138,7 @@ class PipelineCardSchema(BaseModel):
     candidateName: str
     initials: str
     avatarColor: str
+    avatarFileId: int | None = None
     matchPercent: float | None
     matchStatus: Literal["analyzing", "done"] = "analyzing"
     stageStatus: str = "pending_review"

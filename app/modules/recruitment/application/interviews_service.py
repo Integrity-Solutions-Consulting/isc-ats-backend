@@ -89,7 +89,25 @@ class InterviewService:
             created_by=actor.user_id,
             ip_created=actor.ip,
         )
-        return await self.repository.add(interview)
+        interview = await self.repository.add(interview)
+
+        # In-app notification for the candidate (symmetric with create_invite)
+        candidate_user_id = await self._candidate_user_id(data.application_id)
+        if candidate_user_id is not None:
+            session = self.repository.session
+            session.add(
+                Notification(
+                    recipient_id=candidate_user_id,
+                    title="Tienes una entrevista programada",
+                    body="Te han agendado una entrevista. Revisa tu correo para más detalles.",
+                    related_entity_type="interview",
+                    related_entity_id=interview.id,
+                    created_by=actor.user_id,
+                    ip_created=actor.ip,
+                )
+            )
+            await session.flush()
+        return interview
 
     async def update(
         self, interview_id: int, data: InterviewUpdate, actor: CurrentUser

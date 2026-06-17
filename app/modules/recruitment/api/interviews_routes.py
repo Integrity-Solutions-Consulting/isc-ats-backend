@@ -1,3 +1,4 @@
+import logging
 from datetime import date, timedelta
 from typing import Annotated
 
@@ -14,12 +15,14 @@ from app.modules.comms.application.email_sender import EmailMessage
 from app.modules.comms.application.email_templates import (
     render_interview_invitation_email,
     render_interview_slot_offer_email,
+    render_slot_confirmed_email,
 )
 from app.modules.comms.application.meeting_provider import MeetingRequest
 from app.modules.comms.infrastructure.email_sender_factory import build_email_sender
 from app.modules.comms.infrastructure.meeting_provider_factory import (
     build_meeting_provider,
 )
+from app.modules.comms.infrastructure.models import Notification
 from app.modules.org.infrastructure.models import Parameter, ProcessStage
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.interviews_schemas import (
@@ -51,6 +54,8 @@ from app.modules.recruitment.infrastructure.interview_models import (
 from app.modules.recruitment.infrastructure.models import Vacancy
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/interviews", tags=["recruitment · interviews"])
 
@@ -111,6 +116,9 @@ async def _create_teams_meeting(interview_id: int) -> None:
                 await session.flush()
                 await session.commit()
         except Exception:
+            logger.exception(
+                "Failed to create Teams meeting for interview %s", interview_id
+            )
             await session.rollback()
             return
     # The link is now persisted; send the invitation in a fresh session.
@@ -144,6 +152,9 @@ async def _send_interview_invitation(interview_id: int) -> None:
             candidate_user = await BaseRepository(session, User).get(candidate.user_id)
             if candidate_user is None:
                 return
+            interviewer = await BaseRepository(session, User).get(
+                interview.interviewer_id
+            )
             vacancy_name = await ParameterRepository(session).get(vacancy.vacancy_name_id)
             rendered = render_interview_invitation_email(
                 candidate.first_name,
@@ -152,6 +163,9 @@ async def _send_interview_invitation(interview_id: int) -> None:
                 interview.teams_meeting_url,
             )
             recipients = [candidate_user.email]
+            # Also send to the interviewer (TH) and any extra email
+            if interviewer is not None and interviewer.email != candidate_user.email:
+                recipients.append(interviewer.email)
             if interview.extra_email:
                 recipients.append(interview.extra_email)
             dispatch = EmailDispatchService(session, build_email_sender())
@@ -166,6 +180,9 @@ async def _send_interview_invitation(interview_id: int) -> None:
                 )
             await session.commit()
         except Exception:
+            logger.exception(
+                "Failed to send interview invitation for interview %s", interview_id
+            )
             await session.rollback()
 
 
@@ -222,8 +239,87 @@ async def _send_slot_offer_email(interview_id: int) -> None:
                 )
             await session.commit()
         except Exception:
+            logger.exception(
+                "Failed to send slot offer email for interview %s", interview_id
+            )
             await session.rollback()
 
+
+async def _notify_slot_confirmed(interview_id: int) -> None:
+    """Background task: notify the interviewer (HR) that a candidate confirmed a slot.
+
+    Creates an in-app notification for the interviewer and sends a confirmation
+    email (including the Teams link when available) to the interviewer and any
+    extra_email.  Runs after the Teams meeting has been created.
+    """
+    async with async_session_factory() as session:
+        try:
+            interview = await BaseRepository(session, Interview).get(interview_id)
+            if interview is None or interview.scheduled_at is None:
+                return
+            application = await BaseRepository(session, Application).get(
+                interview.application_id
+            )
+            if application is None:
+                return
+            candidate = await BaseRepository(session, Candidate).get(
+                application.candidate_id
+            )
+            vacancy = await BaseRepository(session, Vacancy).get(application.vacancy_id)
+            if candidate is None or vacancy is None:
+                return
+            interviewer = await BaseRepository(session, User).get(
+                interview.interviewer_id
+            )
+            if interviewer is None:
+                return
+            vacancy_name = await ParameterRepository(session).get(
+                vacancy.vacancy_name_id
+            )
+            vn = vacancy_name.name if vacancy_name else "la vacante"
+            candidate_name = f"{candidate.first_name} {candidate.last_name}".strip()
+
+            # 1) Email to HR / interviewer (+ extra_email)
+            rendered = render_slot_confirmed_email(
+                interviewer_first_name=interviewer.email.split("@")[0],
+                candidate_full_name=candidate_name,
+                vacancy_name=vn,
+                scheduled_at=interview.scheduled_at,
+                join_url=interview.teams_meeting_url,
+            )
+            recipients = [interviewer.email]
+            if interview.extra_email:
+                recipients.append(interview.extra_email)
+            dispatch = EmailDispatchService(session, build_email_sender())
+            for to_email in recipients:
+                await dispatch.send(
+                    EmailMessage(
+                        to_email=to_email,
+                        subject=rendered.subject,
+                        html_body=rendered.html_body,
+                        text_body=rendered.text_body,
+                    )
+                )
+
+            # 2) In-app notification for the interviewer
+            session.add(
+                Notification(
+                    recipient_id=interviewer.id,
+                    title="Un candidato confirmó su horario de entrevista",
+                    body=(
+                        f"{candidate_name} eligió un horario para la vacante {vn}."
+                    ),
+                    related_entity_type="interview",
+                    related_entity_id=interview.id,
+                    created_by=None,
+                )
+            )
+            await session.commit()
+        except Exception:
+            logger.exception(
+                "Failed to notify slot confirmation for interview %s", interview_id
+            )
+            await session.rollback()
 
 def get_service(session: SessionDep) -> InterviewService:
     return InterviewService(
@@ -384,6 +480,8 @@ async def confirm_my_offer(
         background_tasks.add_task(_create_teams_meeting, confirmed.id)
     elif confirmed.teams_meeting_url:
         background_tasks.add_task(_send_interview_invitation, confirmed.id)
+    # Notify the interviewer (HR) that the candidate picked a slot.
+    background_tasks.add_task(_notify_slot_confirmed, confirmed.id)
     return InterviewRead.model_validate(confirmed)
 
 

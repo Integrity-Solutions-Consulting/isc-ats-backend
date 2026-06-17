@@ -1,4 +1,5 @@
 import io
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -13,8 +14,12 @@ from app.modules.auth.api.authorization import require_permission
 from app.modules.auth.infrastructure.models import User
 from app.modules.comms.application.email_dispatch_service import EmailDispatchService
 from app.modules.comms.application.email_sender import EmailMessage
-from app.modules.comms.application.email_templates import render_stage_change_email
+from app.modules.comms.application.email_templates import (
+    render_rejection_email,
+    render_stage_change_email,
+)
 from app.modules.comms.infrastructure.email_sender_factory import build_email_sender
+from app.modules.comms.infrastructure.models import Notification
 from app.modules.org.infrastructure.models import Parameter, ProcessStage
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.applications_schemas import (
@@ -45,6 +50,8 @@ from app.modules.storage.infrastructure.models import File
 from app.shared.ownership import is_candidate_portal, require_owner
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/applications", tags=["recruitment · applications"])
 
@@ -77,12 +84,14 @@ def get_service(session: SessionDep) -> ApplicationService:
 ServiceDep = Annotated[ApplicationService, Depends(get_service)]
 
 
-async def _send_stage_change_email(application_id: int, new_stage_id: int) -> None:
+async def _notify_stage_change(application_id: int, new_stage_id: int) -> None:
     """Background task: notify the candidate that their application changed stage.
 
     Opens its own DB session (the request session is already closed) and resolves
     the candidate email plus the vacancy and stage names from their parameter
-    catalogs. Never propagates — a failed notification must not affect the move.
+    catalogs.  Creates both an email and an in-app notification so the candidate
+    sees it in their bell icon.  Never propagates — a failed notification must
+    not affect the move.
     """
     async with async_session_factory() as session:
         try:
@@ -104,9 +113,12 @@ async def _send_stage_change_email(application_id: int, new_stage_id: int) -> No
             stage_name = await params.get(stage.stage_id)
             if vacancy_name is None or stage_name is None:
                 return
-            rendered = render_stage_change_email(
-                candidate.first_name, vacancy_name.name, stage_name.name
-            )
+
+            vn = vacancy_name.name
+            sn = stage_name.name
+
+            # 1) Email
+            rendered = render_stage_change_email(candidate.first_name, vn, sn)
             dispatch = EmailDispatchService(session, build_email_sender())
             await dispatch.send(
                 EmailMessage(
@@ -116,8 +128,88 @@ async def _send_stage_change_email(application_id: int, new_stage_id: int) -> No
                     text_body=rendered.text_body,
                 )
             )
+
+            # 2) In-app notification
+            session.add(
+                Notification(
+                    recipient_id=user.id,
+                    title="Tu postulación avanzó de etapa",
+                    body=(
+                        f"Tu postulación para {vn} ahora se encuentra "
+                        f"en la etapa: {sn}."
+                    ),
+                    related_entity_type="application",
+                    related_entity_id=application.id,
+                    created_by=None,
+                )
+            )
             await session.commit()
         except Exception:
+            logger.exception(
+                "Failed to notify stage change for application %s", application_id
+            )
+            await session.rollback()
+
+
+async def _notify_rejection(application_id: int) -> None:
+    """Background task: notify the candidate that their application was rejected.
+
+    Professional wording — the candidate is told the profile did not match the
+    specific requirements (no misleading "process concluded" phrasing).  Creates
+    both an email and an in-app notification.
+    """
+    async with async_session_factory() as session:
+        try:
+            application = await BaseRepository(session, Application).get(application_id)
+            if application is None:
+                return
+            candidate = await BaseRepository(session, Candidate).get(
+                application.candidate_id
+            )
+            if candidate is None:
+                return
+            user = await BaseRepository(session, User).get(candidate.user_id)
+            vacancy = await BaseRepository(session, Vacancy).get(application.vacancy_id)
+            if user is None or vacancy is None:
+                return
+            params = ParameterRepository(session)
+            vacancy_name = await params.get(vacancy.vacancy_name_id)
+            if vacancy_name is None:
+                return
+
+            vn = vacancy_name.name
+
+            # 1) Email
+            rendered = render_rejection_email(candidate.first_name, vn)
+            dispatch = EmailDispatchService(session, build_email_sender())
+            await dispatch.send(
+                EmailMessage(
+                    to_email=user.email,
+                    subject=rendered.subject,
+                    html_body=rendered.html_body,
+                    text_body=rendered.text_body,
+                )
+            )
+
+            # 2) In-app notification
+            session.add(
+                Notification(
+                    recipient_id=user.id,
+                    title="Actualización de tu postulación",
+                    body=(
+                        f"Tu postulación para {vn} no continuará en el proceso. "
+                        f"Te animamos a explorar otras vacantes."
+                    ),
+                    related_entity_type="application",
+                    related_entity_id=application.id,
+                    created_by=None,
+                )
+            )
+            await session.commit()
+        except Exception:
+            logger.exception(
+                "Failed to notify rejection for application %s", application_id
+            )
             await session.rollback()
 
 
@@ -215,11 +307,16 @@ async def update_application(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except ApplicationReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    # Notify the candidate only when the Kanban stage actually changed.
-    if updated.current_stage_id is not None and updated.current_stage_id != old_stage_id:
-        background_tasks.add_task(
-            _send_stage_change_email, updated.id, updated.current_stage_id
-        )
+    # Notify the candidate when the Kanban stage actually changed.
+    if updated.current_stage_id != old_stage_id:
+        if updated.current_stage_id is not None:
+            # Forward move — email + in-app notification about the new stage.
+            background_tasks.add_task(
+                _notify_stage_change, updated.id, updated.current_stage_id
+            )
+        elif old_stage_id is not None:
+            # Rejection (stage set to None) — professional email + in-app notification.
+            background_tasks.add_task(_notify_rejection, updated.id)
     return ApplicationRead.model_validate(updated)
 
 

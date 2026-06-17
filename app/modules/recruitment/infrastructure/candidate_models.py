@@ -47,6 +47,7 @@ class Candidate(Base, AuditMixin, SoftDeleteMixin):
     is_studying: Mapped[bool] = mapped_column(default=False)
     is_working: Mapped[bool] = mapped_column(default=False)
     current_company: Mapped[str | None] = mapped_column(String(200), default=None)
+    degree_title: Mapped[str | None] = mapped_column(String(200), default=None)
     cv_file_id: Mapped[int | None] = mapped_column(_fk("storage.files.id"), default=None)
     parsed_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     cv_embedding: Mapped[list[float] | None] = mapped_column(

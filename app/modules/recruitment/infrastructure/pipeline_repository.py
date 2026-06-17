@@ -30,6 +30,7 @@ class CardRow:
     current_stage_id: int | None
     first_name: str
     last_name: str
+    avatar_file_id: int | None
     salary_expectation: float | None
     match_score: float | None
     updated_at: str | None
@@ -101,6 +102,7 @@ class PipelineRepository:
                 Application.current_stage_id,
                 Candidate.first_name,
                 Candidate.last_name,
+                Candidate.avatar_file_id,
                 Application.salary_expectation,
                 Application.match_score,
                 Application.updated_at,

@@ -326,3 +326,175 @@ def render_interview_slot_offer_email(
 </html>"""
 
     return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
+
+
+def render_rejection_email(
+    candidate_first_name: str, vacancy_name: str
+) -> RenderedEmail:
+    """Rejection notification for a candidate (Spanish, Ecuador).
+
+    Professional, empathetic wording explaining the candidate does not meet the
+    profile requirements for this specific vacancy, encouraging them to apply to
+    future openings.  Does NOT say "the process has concluded" because the
+    vacancy may still be published and that phrasing would feel dishonest.
+    """
+    subject = f"Actualización de tu postulación — {vacancy_name}"
+    greeting = f"Hola {candidate_first_name}," if candidate_first_name else "Hola,"
+
+    text_body = (
+        f"{greeting}\n\n"
+        f"Agradecemos tu interés en la vacante \"{vacancy_name}\" y el tiempo que "
+        "dedicaste al proceso de selección.\n\n"
+        "Después de revisar cuidadosamente los perfiles, en esta ocasión hemos "
+        "decidido avanzar con candidatos cuyo perfil se ajusta más a los "
+        "requerimientos específicos de esta posición.\n\n"
+        "Te animamos a que continúes revisando nuestras vacantes disponibles; "
+        "tu perfil podría encajar perfectamente en una futura oportunidad.\n\n"
+        "Te deseamos mucho éxito en tu búsqueda profesional.\n\n"
+        "Atentamente,\nIntegrity Solutions"
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html lang="es">
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="background:{_PRIMARY};padding:24px 32px;color:#ffffff;font-size:18px;font-weight:bold;">
+                Integrity Solutions
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;color:#111827;">
+                <h1 style="margin:0 0 12px;font-size:22px;">Actualización de tu postulación</h1>
+                <p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#374151;">
+                  {greeting}
+                </p>
+                <p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#374151;">
+                  Agradecemos tu interés en la vacante <strong>{vacancy_name}</strong>
+                  y el tiempo que dedicaste al proceso de selección.
+                </p>
+                <p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#374151;">
+                  Después de revisar cuidadosamente los perfiles, en esta ocasión hemos
+                  decidido avanzar con candidatos cuyo perfil se ajusta más a los
+                  requerimientos específicos de esta posición.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                  <tr>
+                    <td style="border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;padding:16px 20px;color:#374151;font-size:14px;line-height:1.5;">
+                      Te animamos a que continúes revisando nuestras vacantes disponibles;
+                      tu perfil podría encajar perfectamente en una futura oportunidad.
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0;font-size:14px;line-height:1.5;color:#6b7280;">
+                  Te deseamos mucho éxito en tu búsqueda profesional.
+                </p>
+                <p style="margin:16px 0 0;font-size:14px;color:#6b7280;">
+                  Atentamente,<br/>Integrity Solutions
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+
+    return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
+
+
+def render_slot_confirmed_email(
+    interviewer_first_name: str,
+    candidate_full_name: str,
+    vacancy_name: str,
+    scheduled_at: datetime,
+    join_url: str | None,
+) -> RenderedEmail:
+    """Slot-confirmed notification for the interviewer / HR (Spanish, Ecuador).
+
+    Sent after a candidate picks a time slot (Mode B) and the Teams meeting has
+    been created.  Includes the join link when available.
+    """
+    local = scheduled_at if scheduled_at.tzinfo else scheduled_at.replace(tzinfo=UTC)
+    when = local.astimezone(_EC_TZ).strftime("%d/%m/%Y %H:%M")
+    greeting = (
+        f"Hola {interviewer_first_name},"
+        if interviewer_first_name
+        else "Hola,"
+    )
+
+    subject = f"Entrevista confirmada — {candidate_full_name} · {vacancy_name}"
+    text_body = (
+        f"{greeting}\n\n"
+        f"El candidato {candidate_full_name} ha confirmado su horario de entrevista "
+        f"para la vacante \"{vacancy_name}\".\n\n"
+        f"Fecha y hora: {when} (hora de Ecuador)\n"
+    )
+    if join_url:
+        text_body += f"Enlace de la reunión (Microsoft Teams): {join_url}\n"
+    text_body += "\nIntegrity Solutions"
+
+    join_button = ""
+    if join_url:
+        join_button = f"""\
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 0;">
+                  <tr>
+                    <td style="border-radius:8px;background:{_PRIMARY};">
+                      <a href="{join_url}" style="display:inline-block;padding:14px 28px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;">
+                        Unirme a la reunión (Teams)
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#6b7280;">
+                  Si el botón no funciona, copia y pega este enlace:<br/>
+                  <a href="{join_url}" style="color:{_PRIMARY};word-break:break-all;">{join_url}</a>
+                </p>"""
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html lang="es">
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="background:{_PRIMARY};padding:24px 32px;color:#ffffff;font-size:18px;font-weight:bold;">
+                Integrity Solutions
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;color:#111827;">
+                <h1 style="margin:0 0 12px;font-size:22px;">Entrevista confirmada</h1>
+                <p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#374151;">{greeting}</p>
+                <p style="margin:0 0 20px;font-size:15px;line-height:1.5;color:#374151;">
+                  El candidato <strong>{candidate_full_name}</strong> ha confirmado su horario
+                  de entrevista para la vacante <strong>{vacancy_name}</strong>.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 4px;">
+                  <tr>
+                    <td style="border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;padding:16px 20px;color:#111827;font-size:15px;">
+                      <strong>Candidato:</strong> {candidate_full_name}<br/>
+                      <strong>Fecha y hora:</strong> {when} (hora de Ecuador)
+                    </td>
+                  </tr>
+                </table>{join_button}
+                <p style="margin:24px 0 0;font-size:13px;color:#6b7280;">
+                  Integrity Solutions
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+
+    return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)

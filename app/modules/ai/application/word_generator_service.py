@@ -327,7 +327,7 @@ async def generate_profile_word(application_id: int) -> bytes:
     _fill_simple_table(doc.tables[0], {
         0: full_name,
         1: position_name,
-        2: "",                              # Título Obtenido — can be inferred from career
+        2: candidate.degree_title or "",     # Título Obtenido
         3: university_name,                 # Universidad
         4: location,
         5: user.email if user else "",

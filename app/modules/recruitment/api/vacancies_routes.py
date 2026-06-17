@@ -389,6 +389,7 @@ async def get_vacancy_pipeline(vacancy_id: int, session: SessionDep) -> Pipeline
             candidateName=f"{c.first_name} {c.last_name}",
             initials=(c.first_name[0] + c.last_name[0]).upper(),
             avatarColor=avatar_colors[c.candidate_id % len(avatar_colors)],
+            avatarFileId=c.avatar_file_id,
             matchPercent=float(c.match_score) if c.match_score else None,
             matchStatus="done" if c.match_score else "analyzing",
             stageStatus="pending_review",
