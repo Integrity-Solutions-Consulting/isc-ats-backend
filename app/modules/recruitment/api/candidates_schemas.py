@@ -98,3 +98,17 @@ class CandidateExpandedRead(BaseModel):
     avatar_file_id: int | None
     is_active: bool
     created_at: datetime
+
+
+class CatalogOption(BaseModel):
+    id: int
+    code: str
+    name: str
+
+
+class RegistrationCatalogResponse(BaseModel):
+    cities: list[CatalogOption]
+    provinces: list[CatalogOption]
+    educationLevels: list[CatalogOption]
+    careers: list[CatalogOption]
+    universities: list[CatalogOption]

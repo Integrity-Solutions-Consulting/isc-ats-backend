@@ -12,6 +12,7 @@ from app.modules.recruitment.api.candidates_schemas import (
     CandidateRead,
     CandidateUpdate,
     CvPrefillResponse,
+    RegistrationCatalogResponse,
 )
 from app.modules.recruitment.application.candidates_service import (
     CandidateNotFoundError,
@@ -89,6 +90,41 @@ async def list_candidates_expanded(
     items, total = await service.list_expanded(params, user_id=user_id)
     return Page.create(
         [CandidateExpandedRead(**vars(item)) for item in items], total, params
+    )
+
+
+@router.get("/registration-catalog", response_model=RegistrationCatalogResponse)
+async def registration_catalog(
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> RegistrationCatalogResponse:
+    """Return all reference catalogs needed by the registration form.
+
+    Accessible to any authenticated user (no org.parameters.read required).
+    """
+    from sqlalchemy import select
+
+    TYPES = ("city", "province", "education_level", "career", "university")
+    results = await session.execute(
+        select(Parameter)
+        .where(Parameter.type.in_(TYPES))
+        .where(Parameter.is_active.is_(True))
+        .order_by(Parameter.type, Parameter.name)
+    )
+    params = results.scalars().all()
+
+    def to_options(type_: str) -> list[dict]:
+        return [
+            {"id": p.id, "code": p.code, "name": p.name}
+            for p in params if p.type == type_
+        ]
+
+    return RegistrationCatalogResponse(
+        cities=to_options("city"),
+        provinces=to_options("province"),
+        educationLevels=to_options("education_level"),
+        careers=to_options("career"),
+        universities=to_options("university"),
     )
 
 
