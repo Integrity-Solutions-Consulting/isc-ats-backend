@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import unicodedata
+from difflib import SequenceMatcher
 from typing import Any
 
 import fitz  # PyMuPDF
@@ -96,7 +97,14 @@ def _match_catalog(extracted: str | None, catalog: list[Parameter]) -> int | Non
         cn = _normalize(p.name)
         if norm in cn or cn in norm:
             return p.id
-    return None
+    # 3. Similarity >= 0.70 (handles abbreviations like "Univ. de Guayaquil")
+    best_id, best_score = None, 0.0
+    for p in catalog:
+        score = SequenceMatcher(None, norm, _normalize(p.name)).ratio()
+        if score > best_score:
+            best_score = score
+            best_id = p.id
+    return best_id if best_score >= 0.70 else None
 
 
 # ── PDF helpers (same pattern as cv_parse_service) ───────────────────────────
