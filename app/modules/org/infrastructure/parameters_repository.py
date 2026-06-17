@@ -20,3 +20,12 @@ class ParameterRepository(BaseRepository[Parameter]):
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_all_by_type(self, type_: str) -> list[Parameter]:
+        stmt = (
+            select(Parameter)
+            .where(Parameter.type == type_)
+            .where(Parameter.is_active.is_(True))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())

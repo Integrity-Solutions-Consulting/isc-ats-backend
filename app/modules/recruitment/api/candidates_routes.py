@@ -11,6 +11,7 @@ from app.modules.recruitment.api.candidates_schemas import (
     CandidateExpandedRead,
     CandidateRead,
     CandidateUpdate,
+    CvPrefillResponse,
 )
 from app.modules.recruitment.application.candidates_service import (
     CandidateNotFoundError,
@@ -89,6 +90,18 @@ async def list_candidates_expanded(
     return Page.create(
         [CandidateExpandedRead(**vars(item)) for item in items], total, params
     )
+
+
+@router.post("/cv/prefill", response_model=CvPrefillResponse)
+async def cv_prefill(
+    file_id: int,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> CvPrefillResponse:
+    """Extract personal+education data from a CV and fuzzy-match catalog IDs."""
+    from app.modules.ai.application.cv_prefill_service import prefill_from_cv
+    result = await prefill_from_cv(file_id, session)
+    return CvPrefillResponse(**result)
 
 
 @router.get(

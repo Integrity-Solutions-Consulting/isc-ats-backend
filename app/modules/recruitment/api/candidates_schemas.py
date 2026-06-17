@@ -20,6 +20,7 @@ class CandidateBase(BaseModel):
     is_studying: bool = False
     is_working: bool = False
     current_company: str | None = Field(default=None, max_length=200)
+    degree_title: str | None = Field(default=None, max_length=200)
     cv_file_id: int | None = None
 
 
@@ -43,6 +44,7 @@ class CandidateUpdate(BaseModel):
     is_studying: bool | None = None
     is_working: bool | None = None
     current_company: str | None = Field(default=None, max_length=200)
+    degree_title: str | None = Field(default=None, max_length=200)
     cv_file_id: int | None = None
 
 
@@ -56,6 +58,17 @@ class CandidateRead(CandidateBase):
     last_parsed_at: datetime | None = None
     is_active: bool
     created_at: datetime
+
+
+class CvPrefillResponse(BaseModel):
+    firstName: str | None = None
+    lastName: str | None = None
+    phone: str | None = None
+    cityId: int | None = None
+    provinceId: int | None = None
+    educationLevelId: int | None = None
+    careerId: int | None = None
+    universityId: int | None = None
 
 
 class CandidateExpandedRead(BaseModel):
@@ -80,6 +93,7 @@ class CandidateExpandedRead(BaseModel):
     is_studying: bool
     is_working: bool
     current_company: str | None
+    degree_title: str | None
     cv_file_id: int | None
     avatar_file_id: int | None
     is_active: bool
