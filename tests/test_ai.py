@@ -280,3 +280,20 @@ def test_match_catalog_returns_none_below_threshold() -> None:
 def test_match_catalog_none_for_empty_input() -> None:
     assert _match_catalog(None, [_cat(1, "Quito")]) is None
     assert _match_catalog("", [_cat(1, "Quito")]) is None
+
+
+async def test_load_catalogs_single_session_no_concurrency_error(session: AsyncSession) -> None:
+    # Regression: catalogs were loaded with asyncio.gather over ONE AsyncSession,
+    # raising InvalidRequestError ("concurrent operations are not permitted") in
+    # production. They must now load in a single query and partition by type.
+    from app.modules.ai.application.cv_prefill_service import _CATALOG_TYPES, _load_catalogs
+
+    repo = BaseRepository(session, Parameter)
+    await repo.add(Parameter(type="city", code=uuid.uuid4().hex[:8], name="Durán"))
+    await repo.add(Parameter(type="career", code=uuid.uuid4().hex[:8], name="Software"))
+
+    catalogs = await _load_catalogs(session)
+
+    assert set(catalogs.keys()) == set(_CATALOG_TYPES)
+    assert any(p.name == "Durán" for p in catalogs["city"])
+    assert any(p.name == "Software" for p in catalogs["career"])

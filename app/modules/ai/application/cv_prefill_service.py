@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import app.models_registry  # noqa: F401
 from app.core.config import settings
 from app.modules.org.infrastructure.models import Parameter
-from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.storage.infrastructure.minio_client import minio_client
 from app.modules.storage.infrastructure.models import File
 
@@ -172,6 +171,33 @@ def _download_file(bucket: str, stored_key: str) -> bytes:
         obj.release_conn()
 
 
+_CATALOG_TYPES = ("city", "province", "education_level", "career", "university")
+
+
+async def _load_catalogs(session: AsyncSession) -> dict[str, list[Parameter]]:
+    """Load every prefill catalog in a SINGLE query, partitioned by type.
+
+    Must NOT fan out into one query per type via asyncio.gather: an AsyncSession
+    backs a single connection and forbids concurrent operations, so gathering
+    several queries on the same session raises InvalidRequestError. One round-trip
+    with `type IN (...)` is both correct and cheaper.
+    """
+    from sqlalchemy import select
+
+    rows = (
+        await session.execute(
+            select(Parameter)
+            .where(Parameter.type.in_(_CATALOG_TYPES))
+            .where(Parameter.is_active.is_(True))
+        )
+    ).scalars().all()
+
+    by_type: dict[str, list[Parameter]] = {t: [] for t in _CATALOG_TYPES}
+    for p in rows:
+        by_type[p.type].append(p)
+    return by_type
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def prefill_from_bytes(pdf_bytes: bytes, session: AsyncSession) -> dict:
@@ -208,14 +234,7 @@ async def prefill_from_bytes(pdf_bytes: bytes, session: AsyncSession) -> dict:
 
     # ── Load catalogs and fuzzy-match ────────────────────────────────────────
     try:
-        repo = ParameterRepository(session)
-        cities, provinces, education_levels, careers, universities = await asyncio.gather(
-            repo.get_all_by_type("city"),
-            repo.get_all_by_type("province"),
-            repo.get_all_by_type("education_level"),
-            repo.get_all_by_type("career"),
-            repo.get_all_by_type("university"),
-        )
+        catalogs = await _load_catalogs(session)
     except Exception:
         logger.exception("CV prefill failed loading catalogs")
         return {}
@@ -228,11 +247,13 @@ async def prefill_from_bytes(pdf_bytes: bytes, session: AsyncSession) -> dict:
         "phone": extracted.get("phone"),
         "homeAddress": extracted.get("home_address"),
         "currentCompany": extracted.get("current_company"),
-        "cityId": _match_catalog(extracted.get("city"), cities),
-        "provinceId": _match_catalog(extracted.get("province"), provinces),
-        "educationLevelId": _match_catalog(extracted.get("education_level"), education_levels),
-        "careerId": _match_catalog(extracted.get("career"), careers),
-        "universityId": _match_catalog(extracted.get("university"), universities),
+        "cityId": _match_catalog(extracted.get("city"), catalogs["city"]),
+        "provinceId": _match_catalog(extracted.get("province"), catalogs["province"]),
+        "educationLevelId": _match_catalog(
+            extracted.get("education_level"), catalogs["education_level"]
+        ),
+        "careerId": _match_catalog(extracted.get("career"), catalogs["career"]),
+        "universityId": _match_catalog(extracted.get("university"), catalogs["university"]),
     }
 
 
