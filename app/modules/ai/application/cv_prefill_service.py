@@ -28,8 +28,8 @@ import app.models_registry  # noqa: F401
 from app.core.config import settings
 from app.modules.org.infrastructure.models import Parameter
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
-from app.modules.storage.infrastructure.models import File
 from app.modules.storage.infrastructure.minio_client import minio_client
+from app.modules.storage.infrastructure.models import File
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,11 @@ _JSON_SCHEMA = """\
 {
   "first_name": "primer nombre",
   "last_name": "apellidos",
+  "id_number": "cédula o pasaporte (solo letras y dígitos, sin espacios)",
+  "birth_date": "fecha de nacimiento en formato estricto YYYY-MM-DD",
   "phone": "número de teléfono o celular (solo dígitos y signo +, sin espacios ni guiones)",
+  "home_address": "dirección domiciliaria o de residencia del candidato",
+  "current_company": "nombre de la empresa donde trabaja ACTUALMENTE",
   "city": "ciudad de residencia",
   "province": "provincia o departamento de residencia",
   "education_level": "nivel de educación más alto (ej: Tercer nivel, Bachillerato, Maestría)",
@@ -58,7 +62,12 @@ _PROMPT_HEADER = (
     "Lee el CV y extrae ÚNICAMENTE los datos personales y educativos indicados.\n\n"
     "REGLAS:\n"
     "- Extrae SOLO lo que esté visible en el CV.\n"
-    "- Si un campo no se encuentra, devuelve null.\n"
+    "- Si un campo no se encuentra, devuelve null. NO inventes ni infieras datos.\n"
+    "- id_number: solo el documento de identidad de la PERSONA; sin espacios ni guiones.\n"
+    "- birth_date: úsala SOLO si está la fecha completa; si falta día o mes, devuelve null.\n"
+    "- home_address: dirección de residencia del candidato, NO direcciones de empresas.\n"
+    "- current_company: solo si el empleo está VIGENTE (ej: 'Actualidad', "
+    "'Presente', sin fecha de fin); si no, devuelve null.\n"
     "- Teléfono: extrae solo los dígitos y el signo +; sin espacios ni guiones.\n"
     "- Devuelve ÚNICAMENTE el JSON, sin texto adicional.\n\n"
     "Estructura exacta a devolver:\n"
@@ -78,26 +87,27 @@ def _normalize(text: str) -> str:
 
 
 def _match_catalog(extracted: str | None, catalog: list[Parameter]) -> int | None:
-    """Fuzzy-match an extracted string against a catalog list, returning the id."""
+    """Fuzzy-match an extracted string against a catalog, returning the best id.
+
+    Scores every entry and keeps the highest — never the first that happens to
+    match. An exact (normalised) hit wins immediately. Containment is treated as
+    a strong signal but still competes on specificity, so "Administración" maps
+    to the closest-length option instead of whichever was inserted first.
+    """
     if not extracted:
         return None
     norm = _normalize(extracted)
-    # 1. Exact match
-    for p in catalog:
-        if _normalize(p.name) == norm:
-            return p.id
-    # 2. Contains (either direction)
-    for p in catalog:
-        cn = _normalize(p.name)
-        if norm in cn or cn in norm:
-            return p.id
-    # 3. Similarity >= 0.70 (handles abbreviations like "Univ. de Guayaquil")
     best_id, best_score = None, 0.0
     for p in catalog:
-        score = SequenceMatcher(None, norm, _normalize(p.name)).ratio()
+        cn = _normalize(p.name)
+        if cn == norm:
+            return p.id
+        score = SequenceMatcher(None, norm, cn).ratio()
+        if cn and (norm in cn or cn in norm):
+            shorter, longer = min(len(norm), len(cn)), max(len(norm), len(cn))
+            score = max(score, 0.60 + 0.40 * (shorter / longer))
         if score > best_score:
-            best_score = score
-            best_id = p.id
+            best_score, best_id = score, p.id
     return best_id if best_score >= 0.70 else None
 
 
@@ -164,46 +174,39 @@ def _download_file(bucket: str, stored_key: str) -> bytes:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-async def prefill_from_cv(file_id: int, session: AsyncSession) -> dict:
-    """Extract personal + education fields from a CV and fuzzy-match catalog IDs.
+async def prefill_from_bytes(pdf_bytes: bytes, session: AsyncSession) -> dict:
+    """Extract personal + education fields from raw CV bytes and match catalog IDs.
 
-    Returns an empty dict when the file is not found, Gemini is not configured,
-    or any unrecoverable error occurs — callers should handle the empty case
-    gracefully rather than failing the onboarding flow.
+    The PDF is processed entirely in memory — nothing is persisted. This is the
+    path used by onboarding so a candidate's CV is never stored until they
+    finish registration (LOPDP data-minimisation). Returns an empty dict when
+    Gemini is not configured or any unrecoverable error occurs — callers should
+    handle the empty case gracefully rather than failing the onboarding flow.
     """
     import asyncio
 
     if not settings.gemini_api_key:
-        logger.warning("GEMINI_API_KEY not set — skipping CV prefill for file %d", file_id)
+        logger.warning("GEMINI_API_KEY not set — skipping CV prefill")
         return {}
 
-    # ── Phase 1: read file metadata from DB ──────────────────────────────────
-    cv_file: File | None = await session.get(File, file_id)
-    if not cv_file:
-        logger.info("File %d not found — skipping prefill", file_id)
-        return {}
-    bucket, stored_key = cv_file.bucket, cv_file.stored_key
-
-    # ── Phase 2: blocking I/O + AI call (session remains open but idle) ──────
+    # ── AI extraction (blocking I/O + AI call run in threads) ────────────────
     try:
-        pdf_bytes: bytes = await asyncio.to_thread(_download_file, bucket, stored_key)
-
         cv_text = await asyncio.to_thread(_extract_text, pdf_bytes)
         if cv_text:
             contents = _build_text_contents(cv_text)
         else:
             images = await asyncio.to_thread(_pdf_to_images, pdf_bytes)
             if not images:
-                logger.warning("Could not render CV for file %d", file_id)
+                logger.warning("Could not render CV for prefill")
                 return {}
             contents = _build_image_contents(images)
 
         extracted: dict = await asyncio.to_thread(_call_gemini, contents)
     except Exception:
-        logger.exception("CV prefill failed during processing for file %d", file_id)
+        logger.exception("CV prefill failed during processing")
         return {}
 
-    # ── Phase 3: load catalogs and fuzzy-match ────────────────────────────────
+    # ── Load catalogs and fuzzy-match ────────────────────────────────────────
     try:
         repo = ParameterRepository(session)
         cities, provinces, education_levels, careers, universities = await asyncio.gather(
@@ -214,16 +217,45 @@ async def prefill_from_cv(file_id: int, session: AsyncSession) -> dict:
             repo.get_all_by_type("university"),
         )
     except Exception:
-        logger.exception("CV prefill failed loading catalogs for file %d", file_id)
+        logger.exception("CV prefill failed loading catalogs")
         return {}
 
     return {
         "firstName": extracted.get("first_name"),
         "lastName": extracted.get("last_name"),
+        "idNumber": extracted.get("id_number"),
+        "birthDate": extracted.get("birth_date"),
         "phone": extracted.get("phone"),
+        "homeAddress": extracted.get("home_address"),
+        "currentCompany": extracted.get("current_company"),
         "cityId": _match_catalog(extracted.get("city"), cities),
         "provinceId": _match_catalog(extracted.get("province"), provinces),
         "educationLevelId": _match_catalog(extracted.get("education_level"), education_levels),
         "careerId": _match_catalog(extracted.get("career"), careers),
         "universityId": _match_catalog(extracted.get("university"), universities),
     }
+
+
+async def prefill_from_cv(file_id: int, session: AsyncSession) -> dict:
+    """Download a CV already stored in MinIO by file_id and run prefill on it.
+
+    Kept for re-processing an already-persisted CV (e.g. from "Mi perfil"). The
+    onboarding flow does NOT use this — it calls prefill_from_bytes directly so
+    nothing is stored until the candidate finishes registration.
+    """
+    import asyncio
+
+    cv_file: File | None = await session.get(File, file_id)
+    if not cv_file:
+        logger.info("File %d not found — skipping prefill", file_id)
+        return {}
+
+    try:
+        pdf_bytes: bytes = await asyncio.to_thread(
+            _download_file, cv_file.bucket, cv_file.stored_key
+        )
+    except Exception:
+        logger.exception("CV prefill failed downloading file %d", file_id)
+        return {}
+
+    return await prefill_from_bytes(pdf_bytes, session)

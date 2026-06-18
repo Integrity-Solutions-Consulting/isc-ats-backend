@@ -17,6 +17,7 @@ from app.modules.ai.application.cv_parse_jobs_service import (
     CvParseJobReferenceError,
     CvParseJobService,
 )
+from app.modules.ai.application.cv_prefill_service import _match_catalog
 from app.modules.ai.application.vacancy_promo_images_service import (
     VacancyPromoImageNotFoundError,
     VacancyPromoImageReferenceError,
@@ -239,3 +240,43 @@ async def test_list_ai_usage_logs_by_action(session: AsyncSession) -> None:
     items, total = await svc.list(PageParams(page=1, size=20), action="cv_parse")
     assert total >= 1
     assert all(i.action == "cv_parse" for i in items)
+
+
+# ── CV prefill catalog matching (pure, no DB) ───────────────────────────────────
+
+
+def _cat(id_: int, name: str) -> Parameter:
+    return Parameter(id=id_, type="career", code=f"c{id_}", name=name)
+
+
+def test_match_catalog_exact_wins() -> None:
+    catalog = [_cat(1, "Administración de Empresas"), _cat(2, "Derecho")]
+    assert _match_catalog("derecho", catalog) == 2
+
+
+def test_match_catalog_is_order_independent() -> None:
+    # "Administración" alone is ambiguous. The previous implementation returned
+    # the FIRST containing entry, so the result flipped with list order. The fix
+    # scores every entry, so both orderings must resolve to the same id.
+    a = _cat(1, "Administración de Empresas")
+    b = _cat(2, "Administración Pública")
+    assert _match_catalog("Administración", [a, b]) == _match_catalog("Administración", [b, a])
+
+
+def test_match_catalog_picks_best_by_similarity() -> None:
+    catalog = [
+        _cat(1, "Universidad Central del Ecuador"),
+        _cat(2, "Universidad de Guayaquil"),
+    ]
+    # A light abbreviation must land on Guayaquil, not the first entry.
+    assert _match_catalog("Universidad Guayaquil", catalog) == 2
+
+
+def test_match_catalog_returns_none_below_threshold() -> None:
+    catalog = [_cat(1, "Quito"), _cat(2, "Guayaquil")]
+    assert _match_catalog("Cuenca", catalog) is None
+
+
+def test_match_catalog_none_for_empty_input() -> None:
+    assert _match_catalog(None, [_cat(1, "Quito")]) is None
+    assert _match_catalog("", [_cat(1, "Quito")]) is None

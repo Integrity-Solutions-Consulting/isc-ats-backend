@@ -1,6 +1,15 @@
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File as FastAPIFile,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.modules.auth.api.authorization import require_permission
@@ -130,13 +139,19 @@ async def registration_catalog(
 
 @router.post("/cv/prefill", response_model=CvPrefillResponse)
 async def cv_prefill(
-    file_id: int,
     session: SessionDep,
     current_user: CurrentUserDep,
+    file: Annotated[UploadFile, FastAPIFile(...)],
 ) -> CvPrefillResponse:
-    """Extract personal+education data from a CV and fuzzy-match catalog IDs."""
-    from app.modules.ai.application.cv_prefill_service import prefill_from_cv
-    result = await prefill_from_cv(file_id, session)
+    """Extract personal+education data from an uploaded CV and match catalog IDs.
+
+    The PDF is processed transiently in memory and NEVER persisted — storage
+    only happens later, when the candidate finishes registration. This keeps
+    pre-fill compliant with data-minimisation (no CV stored without consent).
+    """
+    from app.modules.ai.application.cv_prefill_service import prefill_from_bytes
+    pdf_bytes = await file.read()
+    result = await prefill_from_bytes(pdf_bytes, session)
     return CvPrefillResponse(**result)
 
 
