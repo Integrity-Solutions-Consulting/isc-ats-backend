@@ -24,9 +24,9 @@ class CandidateExpanded:
     birth_date: date | None
     phone: str | None
     city: str | None
-    province: str | None
     education_level: str | None
     career: str | None
+    title: str | None
     university: str | None
     home_address: str | None
     is_studying: bool
@@ -47,9 +47,9 @@ class CandidatesExpandedRepository:
 
     def _base_stmt(self):
         CityParam = aliased(Parameter, name="city_p")
-        ProvinceParam = aliased(Parameter, name="province_p")
         EducationParam = aliased(Parameter, name="education_p")
         CareerParam = aliased(Parameter, name="career_p")
+        TitleParam = aliased(Parameter, name="title_p")
         UniversityParam = aliased(Parameter, name="university_p")
 
         return (
@@ -63,9 +63,9 @@ class CandidatesExpandedRepository:
                 Candidate.birth_date,
                 Candidate.phone,
                 CityParam.name.label("city"),
-                ProvinceParam.name.label("province"),
                 EducationParam.name.label("education_level"),
                 CareerParam.name.label("career"),
+                TitleParam.name.label("title"),
                 UniversityParam.name.label("university"),
                 Candidate.home_address,
                 Candidate.is_studying,
@@ -79,9 +79,9 @@ class CandidatesExpandedRepository:
             )
             .join(User, Candidate.user_id == User.id)
             .outerjoin(CityParam, Candidate.city_id == CityParam.id)
-            .outerjoin(ProvinceParam, Candidate.province_id == ProvinceParam.id)
             .outerjoin(EducationParam, Candidate.education_level_id == EducationParam.id)
             .outerjoin(CareerParam, Candidate.career_id == CareerParam.id)
+            .outerjoin(TitleParam, Candidate.title_id == TitleParam.id)
             .outerjoin(UniversityParam, Candidate.university_id == UniversityParam.id)
             .where(Candidate.is_active.is_(True))
         )

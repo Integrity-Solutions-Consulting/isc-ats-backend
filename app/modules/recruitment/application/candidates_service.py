@@ -107,7 +107,7 @@ class CandidateService:
         await self.repository.soft_delete(candidate)
 
     async def _validate_optional_refs(self, values: dict[str, Any]) -> None:
-        for field in ("city_id", "province_id", "education_level_id", "career_id", "university_id"):
+        for field in ("city_id", "education_level_id", "career_id", "title_id", "university_id"):
             await self._assert(self.parameters, values, field)
         for field in ("avatar_file_id", "cv_file_id"):
             await self._assert(self.files, values, field)

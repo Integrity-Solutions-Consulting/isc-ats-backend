@@ -287,15 +287,11 @@ async def generate_profile_word(application_id: int) -> bytes:
         vacancy: Vacancy | None = await session.get(Vacancy, app.vacancy_id)
         user: User | None = await session.get(User, candidate.user_id)
 
-        # Resolve city/province names
+        # Resolve city name (the client doc shows country + city, not province)
         city_name = ""
-        province_name = ""
         if candidate.city_id:
             city_param: Parameter | None = await session.get(Parameter, candidate.city_id)
             city_name = city_param.name if city_param else ""
-        if candidate.province_id:
-            prov_param: Parameter | None = await session.get(Parameter, candidate.province_id)
-            province_name = prov_param.name if prov_param else ""
 
         # Resolve university name
         university_name = ""
@@ -321,7 +317,7 @@ async def generate_profile_word(application_id: int) -> bytes:
     doc = Document(TEMPLATE_PATH)
 
     full_name = f"{candidate.first_name} {candidate.last_name}".strip()
-    location = f"{city_name}, {province_name}".strip(", ") if (city_name or province_name) else ""
+    location = city_name
 
     # Section 1 — personal data (Table 0)
     _fill_simple_table(doc.tables[0], {

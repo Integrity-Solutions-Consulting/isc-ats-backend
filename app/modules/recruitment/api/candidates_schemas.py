@@ -11,10 +11,10 @@ class CandidateBase(BaseModel):
     birth_date: date | None = None
     phone: str | None = Field(default=None, max_length=20)
     city_id: int | None = None
-    province_id: int | None = None
     avatar_file_id: int | None = None
     education_level_id: int | None = None
     career_id: int | None = None
+    title_id: int | None = None
     university_id: int | None = None
     home_address: str | None = Field(default=None, max_length=300)
     is_studying: bool = False
@@ -35,10 +35,10 @@ class CandidateUpdate(BaseModel):
     birth_date: date | None = None
     phone: str | None = Field(default=None, max_length=20)
     city_id: int | None = None
-    province_id: int | None = None
     avatar_file_id: int | None = None
     education_level_id: int | None = None
     career_id: int | None = None
+    title_id: int | None = None
     university_id: int | None = None
     home_address: str | None = Field(default=None, max_length=300)
     is_studying: bool | None = None
@@ -69,9 +69,9 @@ class CvPrefillResponse(BaseModel):
     homeAddress: str | None = None
     currentCompany: str | None = None
     cityId: int | None = None
-    provinceId: int | None = None
     educationLevelId: int | None = None
     careerId: int | None = None
+    titleId: int | None = None
     universityId: int | None = None
 
 
@@ -89,9 +89,9 @@ class CandidateExpandedRead(BaseModel):
     birth_date: date | None
     phone: str | None
     city: str | None
-    province: str | None
     education_level: str | None
     career: str | None
+    title: str | None
     university: str | None
     home_address: str | None
     is_studying: bool
@@ -112,7 +112,7 @@ class CatalogOption(BaseModel):
 
 class RegistrationCatalogResponse(BaseModel):
     cities: list[CatalogOption]
-    provinces: list[CatalogOption]
     educationLevels: list[CatalogOption]
     careers: list[CatalogOption]
+    titles: list[CatalogOption]
     universities: list[CatalogOption]

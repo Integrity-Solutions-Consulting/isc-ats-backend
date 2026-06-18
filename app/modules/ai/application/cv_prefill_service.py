@@ -1,7 +1,7 @@
 """CV pre-fill extraction using Gemini.
 
 Reads a candidate's uploaded PDF and extracts personal + education fields,
-then fuzzy-matches catalog values (city, province, education_level, career,
+then fuzzy-matches catalog values (city, education_level, career, title,
 university) against the org.parameters table and returns a structured dict
 ready for the onboarding pre-fill response.
 
@@ -50,9 +50,9 @@ _JSON_SCHEMA = """\
   "home_address": "dirección domiciliaria o de residencia del candidato",
   "current_company": "nombre de la empresa donde trabaja ACTUALMENTE",
   "city": "ciudad de residencia",
-  "province": "provincia o departamento de residencia",
   "education_level": "nivel de educación más alto (ej: Tercer nivel, Bachillerato, Maestría)",
-  "career": "título o carrera universitaria más reciente",
+  "career": "SOLO el campo de estudio, sin el grado (ej: 'Software', no 'Ingeniería en Software')",
+  "title": "SOLO el grado obtenido, sin el campo (ej: Ingeniero, Tecnólogo, Licenciado)",
   "university": "nombre de la universidad o institución educativa"
 }"""
 
@@ -67,6 +67,8 @@ _PROMPT_HEADER = (
     "- home_address: dirección de residencia del candidato, NO direcciones de empresas.\n"
     "- current_company: solo si el empleo está VIGENTE (ej: 'Actualidad', "
     "'Presente', sin fecha de fin); si no, devuelve null.\n"
+    "- career vs title: separa SIEMPRE el campo del grado. "
+    "'Ingeniero en Software' → career='Software', title='Ingeniero'.\n"
     "- Teléfono: extrae solo los dígitos y el signo +; sin espacios ni guiones.\n"
     "- Devuelve ÚNICAMENTE el JSON, sin texto adicional.\n\n"
     "Estructura exacta a devolver:\n"
@@ -171,7 +173,7 @@ def _download_file(bucket: str, stored_key: str) -> bytes:
         obj.release_conn()
 
 
-_CATALOG_TYPES = ("city", "province", "education_level", "career", "university")
+_CATALOG_TYPES = ("city", "education_level", "career", "title", "university")
 
 
 async def _load_catalogs(session: AsyncSession) -> dict[str, list[Parameter]]:
@@ -248,11 +250,11 @@ async def prefill_from_bytes(pdf_bytes: bytes, session: AsyncSession) -> dict:
         "homeAddress": extracted.get("home_address"),
         "currentCompany": extracted.get("current_company"),
         "cityId": _match_catalog(extracted.get("city"), catalogs["city"]),
-        "provinceId": _match_catalog(extracted.get("province"), catalogs["province"]),
         "educationLevelId": _match_catalog(
             extracted.get("education_level"), catalogs["education_level"]
         ),
         "careerId": _match_catalog(extracted.get("career"), catalogs["career"]),
+        "titleId": _match_catalog(extracted.get("title"), catalogs["title"]),
         "universityId": _match_catalog(extracted.get("university"), catalogs["university"]),
     }
 

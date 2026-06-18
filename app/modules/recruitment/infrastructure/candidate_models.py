@@ -36,12 +36,12 @@ class Candidate(Base, AuditMixin, SoftDeleteMixin):
     birth_date: Mapped[date | None] = mapped_column(Date, default=None)
     phone: Mapped[str | None] = mapped_column(String(20), default=None)
     city_id: Mapped[int | None] = mapped_column(_fk("org.parameters.id"), default=None)
-    province_id: Mapped[int | None] = mapped_column(_fk("org.parameters.id"), default=None)
     avatar_file_id: Mapped[int | None] = mapped_column(_fk("storage.files.id"), default=None)
     education_level_id: Mapped[int | None] = mapped_column(
         _fk("org.parameters.id"), default=None
     )
     career_id: Mapped[int | None] = mapped_column(_fk("org.parameters.id"), default=None)
+    title_id: Mapped[int | None] = mapped_column(_fk("org.parameters.id"), default=None)
     university_id: Mapped[int | None] = mapped_column(_fk("org.parameters.id"), default=None)
     home_address: Mapped[str | None] = mapped_column(String(300), default=None)
     is_studying: Mapped[bool] = mapped_column(default=False)

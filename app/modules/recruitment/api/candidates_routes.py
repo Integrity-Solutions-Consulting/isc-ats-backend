@@ -113,7 +113,7 @@ async def registration_catalog(
     """
     from sqlalchemy import select
 
-    TYPES = ("city", "province", "education_level", "career", "university")
+    TYPES = ("city", "education_level", "career", "title", "university")
     results = await session.execute(
         select(Parameter)
         .where(Parameter.type.in_(TYPES))
@@ -130,9 +130,9 @@ async def registration_catalog(
 
     return RegistrationCatalogResponse(
         cities=to_options("city"),
-        provinces=to_options("province"),
         educationLevels=to_options("education_level"),
         careers=to_options("career"),
+        titles=to_options("title"),
         universities=to_options("university"),
     )
 
