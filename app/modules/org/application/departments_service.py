@@ -2,6 +2,7 @@ from app.core.dependencies import CurrentUser
 from app.modules.org.api.departments_schemas import DepartmentCreate, DepartmentUpdate
 from app.modules.org.infrastructure.models import Department
 from app.shared.pagination import PageParams
+from app.shared.ports import InUseChecker
 from app.shared.repository import BaseRepository
 
 
@@ -9,11 +10,20 @@ class DepartmentNotFoundError(Exception):
     pass
 
 
+class DepartmentInUseError(Exception):
+    """Cannot delete a department used by a live vacancy or an active process."""
+
+
 class DepartmentService:
     """Thin CRUD service for the org.departments catalog (ORM is the model)."""
 
-    def __init__(self, repository: BaseRepository[Department]) -> None:
+    def __init__(
+        self,
+        repository: BaseRepository[Department],
+        in_use_checker: InUseChecker | None = None,
+    ) -> None:
         self.repository = repository
+        self.in_use_checker = in_use_checker
 
     async def list(self, params: PageParams, *, include_inactive: bool = False) -> tuple[list[Department], int]:
         return await self.repository.list(params, include_inactive=include_inactive)
@@ -44,4 +54,9 @@ class DepartmentService:
 
     async def delete(self, department_id: int) -> None:
         department = await self.get(department_id)
+        if self.in_use_checker is not None and await self.in_use_checker(department_id):
+            raise DepartmentInUseError(
+                "No se puede eliminar el departamento: está en uso por una vacante "
+                "activa o un proceso activo."
+            )
         await self.repository.soft_delete(department)

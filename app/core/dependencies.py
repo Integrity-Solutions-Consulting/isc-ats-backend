@@ -46,10 +46,22 @@ async def get_current_user(
             detail="Invalid token type",
         )
 
+    user_id = int(payload["sub"])
+
+    # Denylist check (security fix 3.4): a password change or self-deactivation
+    # records a per-user cutoff; any access token issued at or before it is dead,
+    # even though its signature and expiry are still valid.
+    issued_at = payload.get("iat")
+    denylist = request.app.state.token_denylist
+    if issued_at is not None and await denylist.is_user_revoked(user_id, int(issued_at)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token revoked",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     ip = request.client.host if request.client else None
-    return CurrentUser(
-        user_id=int(payload["sub"]), ip=ip, portal=payload.get("portal")
-    )
+    return CurrentUser(user_id=user_id, ip=ip, portal=payload.get("portal"))
 
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]

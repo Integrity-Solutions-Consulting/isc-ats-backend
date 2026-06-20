@@ -10,10 +10,15 @@ from app.modules.org.api.client_companies_schemas import (
     ClientCompanyUpdate,
 )
 from app.modules.org.application.client_companies_service import (
+    ClientCompanyInUseError,
     ClientCompanyNotFoundError,
     ClientCompanyService,
 )
 from app.modules.org.infrastructure.models import ClientCompany
+from app.modules.org.infrastructure.org_usage_repository import OrgUsageRepository
+from app.modules.recruitment.infrastructure.vacancy_usage_repository import (
+    VacancyUsageRepository,
+)
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
@@ -21,7 +26,17 @@ router = APIRouter(prefix="/client-companies", tags=["org · client companies"])
 
 
 def get_service(session: SessionDep) -> ClientCompanyService:
-    return ClientCompanyService(BaseRepository(session, ClientCompany))
+    usage = VacancyUsageRepository(session)
+    org = OrgUsageRepository(session)
+
+    async def in_use(company_id: int) -> bool:
+        return (
+            await usage.is_referenced_by_live_vacancy("client_company_id", company_id)
+            or await org.has_active_contacts_for_company(company_id)
+            or await org.has_active_processes_for_company(company_id)
+        )
+
+    return ClientCompanyService(BaseRepository(session, ClientCompany), in_use_checker=in_use)
 
 
 ServiceDep = Annotated[ClientCompanyService, Depends(get_service)]
@@ -94,3 +109,5 @@ async def delete_client_company(company_id: int, service: ServiceDep) -> None:
         await service.delete(company_id)
     except ClientCompanyNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ClientCompanyInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

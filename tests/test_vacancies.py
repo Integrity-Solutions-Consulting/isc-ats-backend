@@ -43,6 +43,7 @@ def _service(session: AsyncSession) -> VacancyService:
         BaseRepository(session, Department),
         BaseRepository(session, Process),
         BaseRepository(session, ProfileTemplate),
+        PipelineRepository(session),
     )
 
 

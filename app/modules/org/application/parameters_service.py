@@ -3,6 +3,7 @@ from app.modules.org.api.parameters_schemas import ParameterCreate, ParameterUpd
 from app.modules.org.infrastructure.models import Parameter
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.shared.pagination import PageParams
+from app.shared.ports import InUseChecker
 
 
 class ParameterError(Exception):
@@ -17,6 +18,10 @@ class ParameterNotFoundError(ParameterError):
     pass
 
 
+class ParameterInUseError(ParameterError):
+    """Cannot delete a parameter still referenced by an active record."""
+
+
 class ParameterService:
     """Thin application service for the org.parameters catalog.
 
@@ -24,8 +29,13 @@ class ParameterService:
     Stamps audit columns from the authenticated principal.
     """
 
-    def __init__(self, repository: ParameterRepository) -> None:
+    def __init__(
+        self,
+        repository: ParameterRepository,
+        in_use_checker: InUseChecker | None = None,
+    ) -> None:
         self.repository = repository
+        self.in_use_checker = in_use_checker
 
     async def list(
         self,
@@ -72,4 +82,9 @@ class ParameterService:
 
     async def delete(self, parameter_id: int) -> None:
         parameter = await self.get(parameter_id)
+        if self.in_use_checker is not None and await self.in_use_checker(parameter_id):
+            raise ParameterInUseError(
+                "No se puede eliminar el parámetro: está en uso por uno o más "
+                "registros activos del sistema."
+            )
         await self.repository.soft_delete(parameter)

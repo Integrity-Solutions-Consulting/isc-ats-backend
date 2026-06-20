@@ -7,6 +7,7 @@ from app.modules.org.infrastructure.models import Parameter, Process, ProcessSta
 from app.modules.org.infrastructure.process_stages_repository import (
     ProcessStageRepository,
 )
+from app.shared.ports import InUseChecker
 from app.shared.repository import BaseRepository
 
 STAGE_PARAMETER_TYPE = "stage"
@@ -14,6 +15,10 @@ STAGE_PARAMETER_TYPE = "stage"
 
 class ProcessStageNotFoundError(Exception):
     pass
+
+
+class ProcessStageInUseError(Exception):
+    """Cannot delete a stage that still holds an active application."""
 
 
 class ProcessStageReferenceError(Exception):
@@ -32,10 +37,12 @@ class ProcessStageService:
         repository: ProcessStageRepository,
         processes: BaseRepository[Process],
         parameters: BaseRepository[Parameter],
+        in_use_checker: InUseChecker | None = None,
     ) -> None:
         self.repository = repository
         self.processes = processes
         self.parameters = parameters
+        self.in_use_checker = in_use_checker
 
     async def list_by_process(self, process_id: int) -> list[ProcessStage]:
         return await self.repository.list_by_process(process_id)
@@ -113,4 +120,10 @@ class ProcessStageService:
 
     async def delete(self, process_stage_id: int) -> None:
         stage = await self.get(process_stage_id)
+        if self.in_use_checker is not None and await self.in_use_checker(
+            process_stage_id
+        ):
+            raise ProcessStageInUseError(
+                "No se puede eliminar la etapa: hay postulaciones activas en ella."
+            )
         await self.repository.soft_delete(stage)

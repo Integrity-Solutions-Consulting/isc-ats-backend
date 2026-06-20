@@ -84,6 +84,68 @@ def render_verification_email(verification_url: str) -> RenderedEmail:
     return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
 
 
+def render_account_exists_email(login_url: str) -> RenderedEmail:
+    """Sent when someone tries to register with an already-registered email.
+
+    The registration API answers generically (it never reveals whether an email
+    exists) to prevent account enumeration; the real owner is informed here, on a
+    channel only they control. Wording is reassuring and points to login.
+    """
+    subject = "Ya tienes una cuenta — Integrity Solutions"
+
+    text_body = (
+        "Hola,\n\n"
+        "Recibimos un intento de registro con este correo, pero ya tienes una "
+        "cuenta con nosotros.\n\n"
+        f"Para ingresar, abre este enlace:\n{login_url}\n\n"
+        "Si no intentaste registrarte, puedes ignorar este mensaje con tranquilidad."
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html lang="es">
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="background:{_PRIMARY};padding:24px 32px;color:#ffffff;font-size:18px;font-weight:bold;">
+                Integrity Solutions
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;color:#111827;">
+                <h1 style="margin:0 0 12px;font-size:22px;">Ya tienes una cuenta</h1>
+                <p style="margin:0 0 24px;font-size:15px;line-height:1.5;color:#374151;">
+                  Recibimos un intento de registro con este correo, pero ya tienes
+                  una cuenta con nosotros. Puedes ingresar con el siguiente botón.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="border-radius:8px;background:{_PRIMARY};">
+                      <a href="{login_url}"
+                         style="display:inline-block;padding:14px 28px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;">
+                        Iniciar sesión
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0;font-size:13px;color:#6b7280;">
+                  Si no intentaste registrarte, puedes ignorar este mensaje con tranquilidad.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+
+    return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
+
+
 def render_interview_invitation_email(
     candidate_first_name: str,
     vacancy_name: str,

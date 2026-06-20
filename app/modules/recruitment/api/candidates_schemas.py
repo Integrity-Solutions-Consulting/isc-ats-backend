@@ -1,7 +1,62 @@
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.shared.validators import (
+    is_adult,
+    is_valid_id_number,
+    is_valid_phone_ec,
+)
+
+
+class _CandidateInputValidators(BaseModel):
+    """Server-side mirror of the frontend EC validation, applied to input
+    schemas only (never to read schemas, so existing rows still serialise).
+    `check_fields=False` lets these decorate fields declared on sibling classes."""
+
+    @field_validator("first_name", "last_name", check_fields=False)
+    @classmethod
+    def _require_non_empty_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Este campo es requerido")
+        return stripped
+
+    @field_validator("cedula", check_fields=False)
+    @classmethod
+    def _validate_cedula(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped:
+            return None
+        if not is_valid_id_number(stripped):
+            raise ValueError("Cédula o documento de identidad inválido")
+        return stripped
+
+    @field_validator("phone", check_fields=False)
+    @classmethod
+    def _validate_phone(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped:
+            return None
+        if not is_valid_phone_ec(stripped):
+            raise ValueError("Número de celular inválido (ej: 0991234567)")
+        return stripped
+
+    @field_validator("birth_date", check_fields=False)
+    @classmethod
+    def _validate_age(cls, v: date | None) -> date | None:
+        if v is None:
+            return v
+        if not is_adult(v):
+            raise ValueError("Debe ser mayor de 18 años")
+        return v
 
 
 class CandidateBase(BaseModel):
@@ -20,15 +75,14 @@ class CandidateBase(BaseModel):
     is_studying: bool = False
     is_working: bool = False
     current_company: str | None = Field(default=None, max_length=200)
-    degree_title: str | None = Field(default=None, max_length=200)
     cv_file_id: int | None = None
 
 
-class CandidateCreate(CandidateBase):
+class CandidateCreate(CandidateBase, _CandidateInputValidators):
     user_id: int = Field(description="auth.users id — one candidate per user")
 
 
-class CandidateUpdate(BaseModel):
+class CandidateUpdate(_CandidateInputValidators):
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
     cedula: str | None = Field(default=None, max_length=20)
@@ -44,7 +98,6 @@ class CandidateUpdate(BaseModel):
     is_studying: bool | None = None
     is_working: bool | None = None
     current_company: str | None = Field(default=None, max_length=200)
-    degree_title: str | None = Field(default=None, max_length=200)
     cv_file_id: int | None = None
 
 
@@ -97,7 +150,6 @@ class CandidateExpandedRead(BaseModel):
     is_studying: bool
     is_working: bool
     current_company: str | None
-    degree_title: str | None
     cv_file_id: int | None
     avatar_file_id: int | None
     is_active: bool

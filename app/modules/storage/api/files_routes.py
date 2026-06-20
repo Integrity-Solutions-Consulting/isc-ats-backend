@@ -1,18 +1,29 @@
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, File as FastAPIFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import File as FastAPIFile
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
 from app.core.dependencies import CurrentUserDep, SessionDep
+from app.core.rate_limit import UPLOAD_LIMIT, limiter
 from app.modules.auth.api.authorization import require_permission
 from app.modules.storage.api.files_schemas import FileCreate, FileRead, FileUpdate
 from app.modules.storage.application.files_service import FileNotFoundError, FileService
+from app.modules.storage.application.upload_validation import (
+    MAX_UPLOAD_BYTES,
+    UploadTooLargeError,
+    UploadTypeError,
+    validate_upload_bytes,
+)
 from app.modules.storage.infrastructure.minio_client import minio_client, upload_file_to_minio
 from app.modules.storage.infrastructure.models import File
 from app.shared.ownership import forbid_candidate_portal, require_owner
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["storage · files"])
 
@@ -128,9 +139,10 @@ async def download_file(
     try:
         obj = minio_client.get_object(file.bucket, file.stored_key)
     except Exception as exc:
+        logger.exception("Object storage fetch failed for file %s", file_id)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Error fetching file from storage: {exc}",
+            detail="Error fetching file from storage",
         ) from exc
 
     def _iter():
@@ -157,7 +169,9 @@ async def download_file(
     response_model=FileRead,
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit(UPLOAD_LIMIT)
 async def upload_file(
+    request: Request,
     file: Annotated[UploadFile, FastAPIFile(...)],
     service: ServiceDep,
     current_user: CurrentUserDep,
@@ -178,24 +192,39 @@ async def upload_file(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"entity_type must be one of: {', '.join(sorted(FILE_ENTITY_TYPES))}",
         )
+
+    # Read at most one byte past the cap so an oversized body is rejected without
+    # ever materializing the whole payload in memory.
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
     try:
-        data = await file.read()
+        detected_mime = validate_upload_bytes(entity_type, data)
+    except UploadTooLargeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)
+        ) from exc
+    except UploadTypeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    try:
         stored_key = upload_file_to_minio(
             file_data=data,
             file_name=file.filename or "upload",
-            content_type=file.content_type,
+            content_type=detected_mime,
         )
     except Exception as exc:
+        logger.exception("Object storage upload failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Error uploading to object storage: {exc}",
+            detail="Error uploading to object storage",
         ) from exc
 
     file_record = FileCreate(
         original_name=file.filename or "upload",
         stored_key=stored_key,
         bucket=settings.minio_bucket,
-        mime_type=file.content_type,
+        mime_type=detected_mime,
         size_bytes=len(data),
         is_public=False,
         entity_type=entity_type,

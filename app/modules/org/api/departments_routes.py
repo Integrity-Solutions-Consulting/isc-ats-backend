@@ -10,10 +10,15 @@ from app.modules.org.api.departments_schemas import (
     DepartmentUpdate,
 )
 from app.modules.org.application.departments_service import (
+    DepartmentInUseError,
     DepartmentNotFoundError,
     DepartmentService,
 )
 from app.modules.org.infrastructure.models import Department
+from app.modules.org.infrastructure.org_usage_repository import OrgUsageRepository
+from app.modules.recruitment.infrastructure.vacancy_usage_repository import (
+    VacancyUsageRepository,
+)
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
@@ -21,7 +26,15 @@ router = APIRouter(prefix="/departments", tags=["org · departments"])
 
 
 def get_service(session: SessionDep) -> DepartmentService:
-    return DepartmentService(BaseRepository(session, Department))
+    usage = VacancyUsageRepository(session)
+    org = OrgUsageRepository(session)
+
+    async def in_use(department_id: int) -> bool:
+        return await usage.is_referenced_by_live_vacancy(
+            "department_id", department_id
+        ) or await org.has_active_processes_for_department(department_id)
+
+    return DepartmentService(BaseRepository(session, Department), in_use_checker=in_use)
 
 
 ServiceDep = Annotated[DepartmentService, Depends(get_service)]
@@ -95,3 +108,5 @@ async def delete_department(department_id: int, service: ServiceDep) -> None:
         await service.delete(department_id)
     except DepartmentNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except DepartmentInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

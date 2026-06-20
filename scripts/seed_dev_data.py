@@ -142,6 +142,7 @@ async def seed(session: AsyncSession) -> None:
     draft = await get_or_create_param(session, type_="vacancy_status", code="draft", name="Borrador")
     paused = await get_or_create_param(session, type_="vacancy_status", code="paused", name="Pausada")
     await get_or_create_param(session, type_="vacancy_status", code="closed", name="Cerrada")
+    await get_or_create_param(session, type_="vacancy_status", code="cancelled", name="Cancelada")
 
     # Template item categories
     await get_or_create_param(session, type_="template_item_category", code="knowledge", name="Conocimientos")

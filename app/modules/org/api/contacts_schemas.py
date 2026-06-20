@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from app.shared.schema_mixins import StripRequiredTextMixin
+
 
 class ContactBase(BaseModel):
     client_company_id: int = Field(examples=[1])
@@ -10,11 +12,11 @@ class ContactBase(BaseModel):
     email: EmailStr = Field(examples=["maria.velez@empresa.com"])
 
 
-class ContactCreate(ContactBase):
+class ContactCreate(ContactBase, StripRequiredTextMixin):
     pass
 
 
-class ContactUpdate(BaseModel):
+class ContactUpdate(StripRequiredTextMixin):
     client_company_id: int | None = None
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)

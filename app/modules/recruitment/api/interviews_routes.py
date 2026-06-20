@@ -2,12 +2,13 @@ import logging
 from datetime import date, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUserDep, SessionDep
+from app.core.task_queue import TaskQueueDep, register_task
 from app.modules.auth.api.authorization import require_permission
 from app.modules.auth.infrastructure.models import User
 from app.modules.comms.application.email_dispatch_service import EmailDispatchService
@@ -416,7 +417,7 @@ async def invite_interview(
     data: InterviewInviteCreate,
     service: ServiceDep,
     current_user: CurrentUserDep,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
 ) -> InterviewRead:
     """Mode B: create a pending interview and email the candidate offered slots.
 
@@ -427,7 +428,7 @@ async def invite_interview(
         created = await service.create_invite(data, current_user)
     except InterviewReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    background_tasks.add_task(_send_slot_offer_email, created.id)
+    await task_queue.enqueue("send_slot_offer_email", created.id)
     return InterviewRead.model_validate(created)
 
 
@@ -455,7 +456,7 @@ async def confirm_my_offer(
     data: SlotConfirmRequest,
     service: ServiceDep,
     current_user: CurrentUserDep,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
 ) -> InterviewRead:
     """The authenticated candidate confirms a chosen slot from their own offer.
 
@@ -477,11 +478,11 @@ async def confirm_my_offer(
     except InterviewValidationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     if settings.meetings_provider == "graph" and not confirmed.teams_meeting_url:
-        background_tasks.add_task(_create_teams_meeting, confirmed.id)
+        await task_queue.enqueue("create_teams_meeting", confirmed.id)
     elif confirmed.teams_meeting_url:
-        background_tasks.add_task(_send_interview_invitation, confirmed.id)
+        await task_queue.enqueue("send_interview_invitation", confirmed.id)
     # Notify the interviewer (HR) that the candidate picked a slot.
-    background_tasks.add_task(_notify_slot_confirmed, confirmed.id)
+    await task_queue.enqueue("notify_slot_confirmed", confirmed.id)
     return InterviewRead.model_validate(confirmed)
 
 
@@ -518,7 +519,7 @@ async def create_interview(
     data: InterviewCreate,
     service: ServiceDep,
     current_user: CurrentUserDep,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
 ) -> InterviewRead:
     try:
         created = await service.create(data, current_user)
@@ -531,9 +532,9 @@ async def create_interview(
     # Create the Teams meeting out-of-band (when configured), then email the
     # candidate the invitation. If a link was supplied directly, just notify.
     if settings.meetings_provider == "graph" and not created.teams_meeting_url:
-        background_tasks.add_task(_create_teams_meeting, created.id)
+        await task_queue.enqueue("create_teams_meeting", created.id)
     elif created.teams_meeting_url:
-        background_tasks.add_task(_send_interview_invitation, created.id)
+        await task_queue.enqueue("send_interview_invitation", created.id)
     return InterviewRead.model_validate(created)
 
 
@@ -569,3 +570,10 @@ async def delete_interview(interview_id: int, service: ServiceDep) -> None:
         await service.delete(interview_id)
     except InterviewNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
+# ── Background task registration (durable queue / inline) ─────────────────────
+register_task("send_slot_offer_email", _send_slot_offer_email)
+register_task("create_teams_meeting", _create_teams_meeting)
+register_task("send_interview_invitation", _send_interview_invitation)
+register_task("notify_slot_confirmed", _notify_slot_confirmed)

@@ -14,7 +14,11 @@ from app.modules.recruitment.api.vacancies_schemas import (
     VacancyUpdate,
 )
 from app.modules.recruitment.infrastructure.models import Vacancy
+from app.modules.recruitment.infrastructure.pipeline_repository import (
+    PipelineRepository,
+)
 from app.shared.pagination import PageParams
+from app.shared.ports import InUseChecker
 from app.shared.repository import BaseRepository
 
 
@@ -22,8 +26,23 @@ class VacancyNotFoundError(Exception):
     pass
 
 
+class VacancyInUseError(Exception):
+    """Cannot delete a vacancy that still has active applications.
+
+    Cancel the vacancy ('cancelled' status) instead — that preserves the
+    applications and their history.
+    """
+
+
 class VacancyReferenceError(Exception):
     """A referenced catalog row or org entity does not exist (or is inactive)."""
+
+
+class VacancyCloseError(Exception):
+    """Cannot move a vacancy to 'closed' while openings remain unfilled.
+
+    Use the 'cancelled' status to close a vacancy without filling every opening.
+    """
 
 
 class VacancyService:
@@ -42,6 +61,8 @@ class VacancyService:
         departments: BaseRepository[Department],
         processes: BaseRepository[Process],
         profile_templates: BaseRepository[ProfileTemplate],
+        pipeline: PipelineRepository,
+        applications_checker: InUseChecker | None = None,
     ) -> None:
         self.repository = repository
         self.parameters = parameters
@@ -50,6 +71,8 @@ class VacancyService:
         self.departments = departments
         self.processes = processes
         self.profile_templates = profile_templates
+        self.pipeline = pipeline
+        self.applications_checker = applications_checker
 
     async def list(
         self,
@@ -91,12 +114,38 @@ class VacancyService:
         vacancy = await self.get(vacancy_id)
         changes = data.model_dump(exclude_unset=True)
         await self._validate_refs(changes)
+        if "status_id" in changes and changes["status_id"] != vacancy.status_id:
+            await self._guard_close(vacancy, changes)
         changes["updated_by"] = actor.user_id
         changes["ip_updated"] = actor.ip
         return await self.repository.update(vacancy, changes)
 
+    async def _guard_close(self, vacancy: Vacancy, changes: dict[str, Any]) -> None:
+        """Block the transition to 'closed' unless every opening is filled.
+
+        Only the 'closed' code is gated — 'cancelled' (and any other status) is a
+        valid way to close a vacancy that will not be fully filled.
+        """
+        new_status = await self.parameters.get(changes["status_id"])
+        if new_status is None or new_status.code != "closed":
+            return
+        pipeline = await self.pipeline.get_pipeline(vacancy.id)
+        openings = changes.get("openings", vacancy.openings)
+        if pipeline.hired_count < openings:
+            raise VacancyCloseError(
+                f"No se puede cerrar la vacante: {pipeline.hired_count} de {openings} "
+                "vacantes cubiertas. Usá el estado 'Cancelada' para cerrarla sin cubrir."
+            )
+
     async def delete(self, vacancy_id: int) -> None:
         vacancy = await self.get(vacancy_id)
+        if self.applications_checker is not None and await self.applications_checker(
+            vacancy_id
+        ):
+            raise VacancyInUseError(
+                "No se puede eliminar la vacante: tiene postulaciones activas. "
+                "Usá el estado 'Cancelada' para cerrarla sin perder el historial."
+            )
         await self.repository.soft_delete(vacancy)
 
     async def _validate_refs(self, values: dict[str, Any]) -> None:

@@ -11,6 +11,7 @@ from app.modules.org.api.process_stages_schemas import (
 )
 from app.modules.org.application.process_stages_service import (
     DuplicateStageError,
+    ProcessStageInUseError,
     ProcessStageNotFoundError,
     ProcessStageReferenceError,
     ProcessStageService,
@@ -19,16 +20,21 @@ from app.modules.org.infrastructure.models import Parameter, Process
 from app.modules.org.infrastructure.process_stages_repository import (
     ProcessStageRepository,
 )
+from app.modules.recruitment.infrastructure.application_usage_repository import (
+    ApplicationUsageRepository,
+)
 from app.shared.repository import BaseRepository
 
 router = APIRouter(prefix="/process-stages", tags=["org · process stages"])
 
 
 def get_service(session: SessionDep) -> ProcessStageService:
+    applications = ApplicationUsageRepository(session)
     return ProcessStageService(
         ProcessStageRepository(session),
         BaseRepository(session, Process),
         BaseRepository(session, Parameter),
+        in_use_checker=applications.has_active_in_stage,
     )
 
 
@@ -112,3 +118,5 @@ async def delete_process_stage(process_stage_id: int, service: ServiceDep) -> No
         await service.delete(process_stage_id)
     except ProcessStageNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ProcessStageInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

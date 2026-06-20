@@ -2,12 +2,13 @@ import io
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUser, CurrentUserDep, SessionDep
+from app.core.task_queue import TaskQueueDep, register_task
 from app.modules.ai.application.analysis_service import analyze_application
 from app.modules.ai.application.word_generator_service import generate_profile_word
 from app.modules.auth.api.authorization import require_permission
@@ -271,7 +272,7 @@ async def create_application(
     service: ServiceDep,
     session: SessionDep,
     current_user: CurrentUserDep,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
 ) -> ApplicationRead:
     await _require_candidate_owner(session, current_user, data.candidate_id)
     try:
@@ -280,7 +281,7 @@ async def create_application(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except DuplicateApplicationError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    background_tasks.add_task(analyze_application, created.id)
+    await task_queue.enqueue("analyze_application", created.id)
     return ApplicationRead.model_validate(created)
 
 
@@ -294,7 +295,7 @@ async def update_application(
     data: ApplicationUpdate,
     service: ServiceDep,
     current_user: CurrentUserDep,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
 ) -> ApplicationRead:
     try:
         existing = await service.get(application_id)
@@ -311,12 +312,12 @@ async def update_application(
     if updated.current_stage_id != old_stage_id:
         if updated.current_stage_id is not None:
             # Forward move — email + in-app notification about the new stage.
-            background_tasks.add_task(
-                _notify_stage_change, updated.id, updated.current_stage_id
+            await task_queue.enqueue(
+                "notify_stage_change", updated.id, updated.current_stage_id
             )
         elif old_stage_id is not None:
             # Rejection (stage set to None) — professional email + in-app notification.
-            background_tasks.add_task(_notify_rejection, updated.id)
+            await task_queue.enqueue("notify_rejection", updated.id)
     return ApplicationRead.model_validate(updated)
 
 
@@ -394,13 +395,16 @@ async def generate_profile(
 async def trigger_analysis(
     application_id: int,
     service: ServiceDep,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
+    force: Annotated[bool, Query()] = False,
 ) -> dict:
     try:
         await service.get(application_id)
     except ApplicationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-    background_tasks.add_task(analyze_application, application_id)
+    # Idempotent by default: an already-scored application is skipped downstream
+    # so the profile-entry safety net never re-spends Gemini. force=True re-runs it.
+    await task_queue.enqueue("analyze_application", application_id, force)
     return {"status": "queued"}
 
 
@@ -414,3 +418,9 @@ async def delete_application(application_id: int, service: ServiceDep) -> None:
         await service.delete(application_id)
     except ApplicationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
+# ── Background task registration (durable queue / inline) ─────────────────────
+register_task("analyze_application", analyze_application)
+register_task("notify_stage_change", _notify_stage_change)
+register_task("notify_rejection", _notify_rejection)

@@ -11,8 +11,12 @@ from app.modules.org.api.parameters_schemas import (
 )
 from app.modules.org.application.parameters_service import (
     DuplicateParameterError,
+    ParameterInUseError,
     ParameterNotFoundError,
     ParameterService,
+)
+from app.modules.org.infrastructure.parameter_usage_repository import (
+    ParameterUsageRepository,
 )
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.shared.pagination import Page, PageParams
@@ -21,7 +25,10 @@ router = APIRouter(prefix="/parameters", tags=["org · parameters"])
 
 
 def get_service(session: SessionDep) -> ParameterService:
-    return ParameterService(ParameterRepository(session))
+    usage = ParameterUsageRepository(session)
+    return ParameterService(
+        ParameterRepository(session), in_use_checker=usage.is_referenced
+    )
 
 
 ServiceDep = Annotated[ParameterService, Depends(get_service)]
@@ -102,3 +109,5 @@ async def delete_parameter(parameter_id: int, service: ServiceDep) -> None:
         await service.delete(parameter_id)
     except ParameterNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ParameterInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

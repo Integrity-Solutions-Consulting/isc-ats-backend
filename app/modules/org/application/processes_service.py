@@ -3,6 +3,7 @@ from app.modules.org.api.processes_schemas import ProcessCreate, ProcessUpdate
 from app.modules.org.infrastructure.models import ClientCompany, Department, Process
 from app.modules.org.infrastructure.processes_repository import ProcessRepository
 from app.shared.pagination import PageParams
+from app.shared.ports import InUseChecker
 from app.shared.repository import BaseRepository
 
 
@@ -18,6 +19,10 @@ class DuplicateProcessError(Exception):
     """A process with the same (company, department, name) already exists."""
 
 
+class ProcessInUseError(Exception):
+    """Cannot delete a process referenced by a live (non-closed) vacancy."""
+
+
 class ProcessService:
     """Process CRUD with double FK validation + composite-uniqueness checks."""
 
@@ -26,10 +31,12 @@ class ProcessService:
         repository: ProcessRepository,
         companies: BaseRepository[ClientCompany],
         departments: BaseRepository[Department],
+        in_use_checker: InUseChecker | None = None,
     ) -> None:
         self.repository = repository
         self.companies = companies
         self.departments = departments
+        self.in_use_checker = in_use_checker
 
     async def list(
         self,
@@ -113,4 +120,8 @@ class ProcessService:
 
     async def delete(self, process_id: int) -> None:
         process = await self.get(process_id)
+        if self.in_use_checker is not None and await self.in_use_checker(process_id):
+            raise ProcessInUseError(
+                "No se puede eliminar el proceso: está en uso por una vacante activa."
+            )
         await self.repository.soft_delete(process)

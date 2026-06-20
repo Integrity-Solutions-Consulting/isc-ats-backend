@@ -11,12 +11,16 @@ from app.modules.org.api.processes_schemas import (
 )
 from app.modules.org.application.processes_service import (
     DuplicateProcessError,
+    ProcessInUseError,
     ProcessNotFoundError,
     ProcessReferenceError,
     ProcessService,
 )
 from app.modules.org.infrastructure.models import ClientCompany, Department
 from app.modules.org.infrastructure.processes_repository import ProcessRepository
+from app.modules.recruitment.infrastructure.vacancy_usage_repository import (
+    VacancyUsageRepository,
+)
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
@@ -24,10 +28,12 @@ router = APIRouter(prefix="/processes", tags=["org · processes"])
 
 
 def get_service(session: SessionDep) -> ProcessService:
+    usage = VacancyUsageRepository(session)
     return ProcessService(
         ProcessRepository(session),
         BaseRepository(session, ClientCompany),
         BaseRepository(session, Department),
+        in_use_checker=lambda pid: usage.is_referenced_by_live_vacancy("process_id", pid),
     )
 
 
@@ -117,3 +123,5 @@ async def delete_process(process_id: int, service: ServiceDep) -> None:
         await service.delete(process_id)
     except ProcessNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ProcessInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

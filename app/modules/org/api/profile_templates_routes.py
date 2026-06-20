@@ -10,10 +10,14 @@ from app.modules.org.api.profile_templates_schemas import (
     ProfileTemplateUpdate,
 )
 from app.modules.org.application.profile_templates_service import (
+    ProfileTemplateInUseError,
     ProfileTemplateNotFoundError,
     ProfileTemplateService,
 )
 from app.modules.org.infrastructure.models import ProfileTemplate
+from app.modules.recruitment.infrastructure.vacancy_usage_repository import (
+    VacancyUsageRepository,
+)
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
@@ -21,7 +25,13 @@ router = APIRouter(prefix="/profile-templates", tags=["org · profile templates"
 
 
 def get_service(session: SessionDep) -> ProfileTemplateService:
-    return ProfileTemplateService(BaseRepository(session, ProfileTemplate))
+    usage = VacancyUsageRepository(session)
+    return ProfileTemplateService(
+        BaseRepository(session, ProfileTemplate),
+        in_use_checker=lambda tid: usage.is_referenced_by_live_vacancy(
+            "profile_template_id", tid
+        ),
+    )
 
 
 ServiceDep = Annotated[ProfileTemplateService, Depends(get_service)]
@@ -97,3 +107,5 @@ async def delete_profile_template(template_id: int, service: ServiceDep) -> None
         await service.delete(template_id)
     except ProfileTemplateNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ProfileTemplateInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

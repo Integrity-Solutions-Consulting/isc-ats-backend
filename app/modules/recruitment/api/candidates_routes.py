@@ -2,16 +2,21 @@ from typing import Annotated
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
-    File as FastAPIFile,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     status,
 )
+from fastapi import (
+    File as FastAPIFile,
+)
 
 from app.core.dependencies import CurrentUserDep, SessionDep
+from app.core.rate_limit import CV_PREFILL_LIMIT, limiter
+from app.core.task_queue import TaskQueueDep, register_task
+from app.modules.ai.application.cv_parse_service import parse_candidate_cv
 from app.modules.auth.api.authorization import require_permission
 from app.modules.auth.infrastructure.models import User
 from app.modules.org.infrastructure.models import Parameter
@@ -29,14 +34,13 @@ from app.modules.recruitment.application.candidates_service import (
     CandidateService,
     DuplicateCandidateError,
 )
-from app.modules.recruitment.infrastructure.candidates_repository import (
-    CandidateRepository,
-)
 from app.modules.recruitment.infrastructure.candidates_expanded import (
     CandidatesExpandedRepository,
 )
+from app.modules.recruitment.infrastructure.candidates_repository import (
+    CandidateRepository,
+)
 from app.modules.storage.infrastructure.models import File
-from app.modules.ai.application.cv_parse_service import parse_candidate_cv
 from app.shared.ownership import (
     forbid_candidate_portal,
     is_candidate_portal,
@@ -138,7 +142,9 @@ async def registration_catalog(
 
 
 @router.post("/cv/prefill", response_model=CvPrefillResponse)
+@limiter.limit(CV_PREFILL_LIMIT)
 async def cv_prefill(
+    request: Request,
     session: SessionDep,
     current_user: CurrentUserDep,
     file: Annotated[UploadFile, FastAPIFile(...)],
@@ -150,7 +156,27 @@ async def cv_prefill(
     pre-fill compliant with data-minimisation (no CV stored without consent).
     """
     from app.modules.ai.application.cv_prefill_service import prefill_from_bytes
-    pdf_bytes = await file.read()
+    from app.modules.storage.application.upload_validation import (
+        MAX_UPLOAD_BYTES,
+        UploadTooLargeError,
+        UploadTypeError,
+        validate_upload_bytes,
+    )
+
+    # Cap the read (memory) and confirm it is really a PDF before spending a
+    # Gemini call — this endpoint is authenticated but otherwise uncosted.
+    pdf_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        validate_upload_bytes("cv", pdf_bytes)
+    except UploadTooLargeError as exc:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)
+        ) from exc
+    except UploadTypeError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
+        ) from exc
+
     result = await prefill_from_bytes(pdf_bytes, session)
     return CvPrefillResponse(**result)
 
@@ -181,7 +207,7 @@ async def create_candidate(
     data: CandidateCreate,
     service: ServiceDep,
     current_user: CurrentUserDep,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
 ) -> CandidateRead:
     # A candidate may only create their own profile (user_id == token subject).
     require_owner(current_user, data.user_id)
@@ -192,7 +218,7 @@ async def create_candidate(
     except DuplicateCandidateError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     if created.cv_file_id:
-        background_tasks.add_task(parse_candidate_cv, created.id)
+        await task_queue.enqueue("parse_candidate_cv", created.id)
     return CandidateRead.model_validate(created)
 
 
@@ -206,7 +232,7 @@ async def update_candidate(
     data: CandidateUpdate,
     service: ServiceDep,
     current_user: CurrentUserDep,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
 ) -> CandidateRead:
     try:
         existing = await service.get(candidate_id)
@@ -222,7 +248,7 @@ async def update_candidate(
     except DuplicateCandidateError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     if data.cv_file_id is not None:
-        background_tasks.add_task(parse_candidate_cv, candidate_id)
+        await task_queue.enqueue("parse_candidate_cv", candidate_id)
     return CandidateRead.model_validate(updated)
 
 
@@ -251,3 +277,7 @@ async def get_candidate_expanded(
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Candidate {candidate_id} not found")
     require_owner(current_user, item.user_id)
     return CandidateExpandedRead(**vars(item))
+
+
+# ── Background task registration (durable queue / inline) ─────────────────────
+register_task("parse_candidate_cv", parse_candidate_cv)

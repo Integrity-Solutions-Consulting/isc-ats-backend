@@ -1,4 +1,13 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from app.shared.validators import password_policy_error
+
+
+def _enforce_password_policy(value: str) -> str:
+    error = password_policy_error(value)
+    if error:
+        raise ValueError(error)
+    return value
 
 
 class LoginRequest(BaseModel):
@@ -27,7 +36,16 @@ class TokenResponse(BaseModel):
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=6, max_length=72)
+    password: str = Field(max_length=72)
+
+    _validate_password = field_validator("password")(_enforce_password_policy)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=72)
+    new_password: str = Field(max_length=72)
+
+    _validate_new_password = field_validator("new_password")(_enforce_password_policy)
 
 
 class VerifyRequest(BaseModel):

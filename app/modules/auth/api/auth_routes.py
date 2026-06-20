@@ -1,15 +1,23 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core.config import settings
-
-logger = logging.getLogger(__name__)
 from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUserDep, SessionDep
+from app.core.rate_limit import (
+    CHANGE_PASSWORD_LIMIT,
+    LOGIN_LIMIT,
+    REFRESH_LIMIT,
+    REGISTER_LIMIT,
+    RESEND_LIMIT,
+    limiter,
+)
 from app.core.security import create_verification_token
+from app.core.task_queue import TaskQueueDep, register_task
 from app.modules.auth.api.auth_schemas import (
+    ChangePasswordRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
@@ -25,6 +33,7 @@ from app.modules.auth.application.auth_service import (
     InvalidCredentialsError,
     InvalidRefreshTokenError,
     InvalidTokenError,
+    SamePasswordError,
 )
 from app.modules.auth.infrastructure.repository import (
     RefreshTokenRepository,
@@ -32,10 +41,15 @@ from app.modules.auth.infrastructure.repository import (
 )
 from app.modules.comms.application.email_dispatch_service import EmailDispatchService
 from app.modules.comms.application.email_sender import EmailMessage
-from app.modules.comms.application.email_templates import render_verification_email
+from app.modules.comms.application.email_templates import (
+    render_account_exists_email,
+    render_verification_email,
+)
 from app.modules.comms.infrastructure.email_sender_factory import build_email_sender
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.infrastructure.candidates_repository import CandidateRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 
@@ -69,7 +83,32 @@ async def _send_verification_email(user_id: int, to_email: str) -> None:
             await session.rollback()
 
 
-def get_service(session: SessionDep) -> AuthService:
+async def _send_account_exists_email(to_email: str) -> None:
+    """Background task: tell an existing user that someone tried to re-register.
+
+    Lets the registration endpoint answer generically (no account enumeration)
+    while still informing the real owner on a channel only they control. Never
+    propagates — this is a courtesy notification.
+    """
+    login_url = f"{settings.frontend_base_url}/login"
+    rendered = render_account_exists_email(login_url)
+    message = EmailMessage(
+        to_email=to_email,
+        subject=rendered.subject,
+        html_body=rendered.html_body,
+        text_body=rendered.text_body,
+    )
+    async with async_session_factory() as session:
+        try:
+            dispatch = EmailDispatchService(session, build_email_sender())
+            await dispatch.send(message)
+            await session.commit()
+        except Exception:
+            logger.exception("Failed to send account-exists email to %s", to_email)
+            await session.rollback()
+
+
+def get_service(session: SessionDep, request: Request) -> AuthService:
     async def candidate_has_profile(user_id: int) -> bool:
         return await CandidateRepository(session).get_by_user_id(user_id) is not None
 
@@ -78,6 +117,7 @@ def get_service(session: SessionDep) -> AuthService:
         refresh_tokens=RefreshTokenRepository(session),
         parameters=ParameterRepository(session),
         has_profile_checker=candidate_has_profile,
+        token_denylist=request.app.state.token_denylist,
     )
 
 
@@ -99,6 +139,7 @@ def _client_ip(request: Request) -> str | None:
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit(LOGIN_LIMIT)
 async def login(
     data: LoginRequest,
     service: ServiceDep,
@@ -114,6 +155,7 @@ async def login(
 
 
 @router.post("/refresh", response_model=TokenResponse)
+@limiter.limit(REFRESH_LIMIT)
 async def refresh(
     data: RefreshRequest,
     service: ServiceDep,
@@ -132,22 +174,30 @@ async def logout(data: RefreshRequest, service: ServiceDep) -> None:
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
+@limiter.limit(REGISTER_LIMIT)
 async def register(
     data: RegisterRequest,
     service: ServiceDep,
     request: Request,
-    background_tasks: BackgroundTasks,
+    task_queue: TaskQueueDep,
 ):
+    # Generic response in BOTH branches so the API never reveals whether an email
+    # is already registered (anti-enumeration). New account → verification email;
+    # existing account → a "you already have an account" email to the real owner.
     try:
         user = await service.register_candidate(
             data.email, data.password, _client_ip(request)
         )
-    except EmailAlreadyExistsError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    # Send the verification email out-of-band so a slow/failed SMTP call never
-    # blocks or fails the registration response.
-    background_tasks.add_task(_send_verification_email, user.id, user.email)
-    return {"message": "Usuario registrado exitosamente"}
+    except EmailAlreadyExistsError:
+        await task_queue.enqueue("send_account_exists_email", data.email)
+    else:
+        # Send the verification email out-of-band so a slow/failed SMTP call never
+        # blocks or fails the registration response.
+        await task_queue.enqueue("send_verification_email", user.id, user.email)
+    return {
+        "message": "Si el correo no estaba registrado, te enviamos un enlace de "
+        "verificación. Revisa tu bandeja de entrada."
+    }
 
 
 @router.post("/verify", status_code=status.HTTP_200_OK)
@@ -163,21 +213,41 @@ async def verify(
 
 
 @router.post("/resend-verification", status_code=status.HTTP_200_OK)
+@limiter.limit(RESEND_LIMIT)
 async def resend_verification(
     data: ResendVerificationRequest,
     service: ServiceDep,
-    background_tasks: BackgroundTasks,
+    request: Request,
+    task_queue: TaskQueueDep,
 ):
     # Generic response regardless of outcome: never reveal whether an email is
     # registered or already verified. The email is only sent for a real,
     # still-unverified account.
     user = await service.get_unverified_user(data.email)
     if user is not None:
-        background_tasks.add_task(_send_verification_email, user.id, user.email)
+        await task_queue.enqueue("send_verification_email", user.id, user.email)
     return {
         "message": "Si el correo está registrado y pendiente de verificación, "
         "te enviamos un nuevo enlace."
     }
+
+
+@router.post("/me/change-password", status_code=status.HTTP_200_OK)
+@limiter.limit(CHANGE_PASSWORD_LIMIT)
+async def change_password(
+    data: ChangePasswordRequest,
+    current_user: CurrentUserDep,
+    service: ServiceDep,
+    request: Request,
+):
+    """Authenticated self password change. Verifies the current password first."""
+    try:
+        await service.change_password(
+            current_user.user_id, data.current_password, data.new_password
+        )
+    except (InvalidCredentialsError, SamePasswordError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return {"message": "Contraseña actualizada exitosamente"}
 
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
@@ -196,3 +266,8 @@ async def delete_me(
     await service.deactivate_user(current_user.user_id)
     # Recruitment layer: deactivate candidate profile (no-op if absent).
     await CandidateRepository(session).deactivate_by_user_id(current_user.user_id)
+
+
+# ── Background task registration (durable queue / inline) ─────────────────────
+register_task("send_verification_email", _send_verification_email)
+register_task("send_account_exists_email", _send_account_exists_email)

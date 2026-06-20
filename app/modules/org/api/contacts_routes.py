@@ -11,10 +11,14 @@ from app.modules.org.api.contacts_schemas import (
 )
 from app.modules.org.application.contacts_service import (
     ContactCompanyNotFoundError,
+    ContactInUseError,
     ContactNotFoundError,
     ContactService,
 )
 from app.modules.org.infrastructure.models import ClientCompany, Contact
+from app.modules.recruitment.infrastructure.vacancy_usage_repository import (
+    VacancyUsageRepository,
+)
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
@@ -22,9 +26,11 @@ router = APIRouter(prefix="/contacts", tags=["org · contacts"])
 
 
 def get_service(session: SessionDep) -> ContactService:
+    usage = VacancyUsageRepository(session)
     return ContactService(
         BaseRepository(session, Contact),
         BaseRepository(session, ClientCompany),
+        in_use_checker=lambda cid: usage.is_referenced_by_live_vacancy("contact_id", cid),
     )
 
 
@@ -105,3 +111,5 @@ async def delete_contact(contact_id: int, service: ServiceDep) -> None:
         await service.delete(contact_id)
     except ContactNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ContactInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

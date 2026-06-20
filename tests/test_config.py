@@ -34,14 +34,42 @@ def test_production_with_default_jwt_secret_raises() -> None:
         )
 
 
+_PROD_JWT = "super-long-random-secret-safe-for-prod-1234567890abcdef"
+
+
 def test_production_with_real_jwt_secret_constructs_fine() -> None:
-    """A strong secret must allow the Settings to construct in production."""
+    """A strong secret + non-default MinIO creds must construct in production."""
     s = _make(
         environment="production",
-        jwt_secret_key="super-long-random-secret-safe-for-prod-1234567890abcdef",
+        jwt_secret_key=_PROD_JWT,
+        minio_access_key="real-access-key",
+        minio_secret_key="real-secret-key",
         debug=False,
     )
     assert s.is_production is True
+
+
+# ---------------------------------------------------------------------------
+# 1b. Production guard — MinIO credentials must not be the well-known default
+# ---------------------------------------------------------------------------
+
+
+def test_production_with_default_minio_credentials_raises() -> None:
+    """Boot must fail when environment=production and MinIO creds are 'minioadmin'."""
+    with pytest.raises(ValueError, match="minio"):
+        _make(
+            environment="production",
+            jwt_secret_key=_PROD_JWT,
+            minio_access_key="minioadmin",
+            minio_secret_key="minioadmin",
+            debug=False,
+        )
+
+
+def test_development_with_default_minio_credentials_is_allowed() -> None:
+    """Defaults are fine outside production (local docker-compose)."""
+    s = _make(environment="development")
+    assert s.minio_access_key == "minioadmin"
 
 
 # ---------------------------------------------------------------------------

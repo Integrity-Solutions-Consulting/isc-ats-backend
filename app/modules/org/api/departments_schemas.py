@@ -2,17 +2,19 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.shared.schema_mixins import StripRequiredTextMixin
+
 
 class DepartmentBase(BaseModel):
     name: str = Field(max_length=150, examples=["Tecnología"])
     description: str | None = Field(default=None, examples=["Área de desarrollo"])
 
 
-class DepartmentCreate(DepartmentBase):
+class DepartmentCreate(DepartmentBase, StripRequiredTextMixin):
     pass
 
 
-class DepartmentUpdate(BaseModel):
+class DepartmentUpdate(StripRequiredTextMixin):
     is_active: bool | None = None
     name: str | None = Field(default=None, max_length=150)
     description: str | None = None

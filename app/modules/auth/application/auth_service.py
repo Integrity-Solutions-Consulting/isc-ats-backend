@@ -14,6 +14,7 @@ from app.core.security import (
     hash_token,
     verify_password,
 )
+from app.core.token_denylist import TokenDenylist
 from app.modules.auth.application.bootstrap_service import CANDIDATE_ROLE_NAME
 from app.modules.auth.infrastructure.models import RefreshToken, Role, User, UserRole
 from app.modules.auth.infrastructure.repository import (
@@ -47,6 +48,10 @@ class InvalidTokenError(AuthError):
     pass
 
 
+class SamePasswordError(AuthError):
+    pass
+
+
 @dataclass
 class AuthTokens:
     """Login / refresh result. `portal` is the catalog CODE (hr | candidate)."""
@@ -72,11 +77,24 @@ class AuthService:
         refresh_tokens: RefreshTokenRepository,
         parameters: ParameterRepository,
         has_profile_checker: ProfileChecker | None = None,
+        token_denylist: TokenDenylist | None = None,
     ) -> None:
         self.users = users
         self.refresh_tokens = refresh_tokens
         self.parameters = parameters
         self.has_profile_checker = has_profile_checker
+        self.token_denylist = token_denylist
+
+    async def _revoke_access_tokens(self, user_id: int) -> None:
+        """Kill every access token the user currently holds (security fix 3.4).
+
+        Paired with refresh-token revocation: a password change or deactivation
+        must end ALL live sessions, not just the refresh side. No-op when no
+        denylist is wired (the access token then self-expires within its TTL).
+        """
+        if self.token_denylist is not None:
+            ttl = settings.access_token_expire_minutes * 60 + 60  # + clock-skew buffer
+            await self.token_denylist.revoke_user(user_id, ttl)
 
     async def login(self, email: str, password: str, ip: str | None) -> AuthTokens:
         user = await self.users.get_by_email(email)
@@ -211,6 +229,30 @@ class AuthService:
             user.is_active = False
             await self.users.session.flush()
         await self.refresh_tokens.revoke_all_by_user_id(user_id)
+        await self._revoke_access_tokens(user_id)
+
+    async def change_password(
+        self, user_id: int, current_password: str, new_password: str
+    ) -> None:
+        """Change an authenticated user's password.
+
+        Verifies the current password, rejects a no-op change, re-hashes the new
+        one, clears the must_change_password flag, and revokes all refresh tokens
+        so any other active session is forced to re-authenticate.
+        """
+        user = await self.users.get(user_id)
+        if user is None or user.password_hash is None:
+            raise InvalidCredentialsError("La contraseña actual es incorrecta")
+        if not verify_password(current_password, user.password_hash):
+            raise InvalidCredentialsError("La contraseña actual es incorrecta")
+        if verify_password(new_password, user.password_hash):
+            raise SamePasswordError("La nueva contraseña debe ser distinta a la actual")
+
+        user.password_hash = hash_password(new_password)
+        user.must_change_password = False
+        await self.users.session.flush()
+        await self.refresh_tokens.revoke_all_by_user_id(user_id)
+        await self._revoke_access_tokens(user_id)
 
     async def verify_email(self, token: str) -> None:
         try:

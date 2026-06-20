@@ -299,6 +299,13 @@ async def generate_profile_word(application_id: int) -> bytes:
             univ_param: Parameter | None = await session.get(Parameter, candidate.university_id)
             university_name = univ_param.name if univ_param else ""
 
+        # Resolve degree/title name from the catalog (title_id replaced the old
+        # free-text degree_title column).
+        title_name = ""
+        if candidate.title_id:
+            title_param: Parameter | None = await session.get(Parameter, candidate.title_id)
+            title_name = title_param.name if title_param else ""
+
         # Resolve vacancy position name
         position_name = ""
         if vacancy and vacancy.vacancy_name_id:
@@ -323,7 +330,7 @@ async def generate_profile_word(application_id: int) -> bytes:
     _fill_simple_table(doc.tables[0], {
         0: full_name,
         1: position_name,
-        2: candidate.degree_title or "",     # Título Obtenido
+        2: title_name,                       # Título Obtenido
         3: university_name,                 # Universidad
         4: location,
         5: user.email if user else "",

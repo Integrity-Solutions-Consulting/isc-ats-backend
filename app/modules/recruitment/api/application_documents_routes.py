@@ -20,6 +20,7 @@ from app.modules.recruitment.infrastructure.application_models import (
     ApplicationDocument,
 )
 from app.modules.storage.infrastructure.models import File
+from app.shared.ownership import forbid_candidate_portal
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
@@ -44,10 +45,14 @@ _READ = Depends(require_permission("recruitment.application_documents.read"))
 @router.get("", response_model=Page[ApplicationDocumentRead], dependencies=[_READ])
 async def list_documents(
     service: ServiceDep,
+    current_user: CurrentUserDep,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
     application_id: Annotated[int | None, Query()] = None,
 ) -> Page[ApplicationDocumentRead]:
+    # Staff-only listing: these documents are not row-scoped per candidate, so a
+    # candidate-portal token must never reach them even if granted the permission.
+    forbid_candidate_portal(current_user)
     params = PageParams(page=page, size=size)
     items, total = await service.list(params, application_id=application_id)
     return Page.create(
@@ -57,8 +62,9 @@ async def list_documents(
 
 @router.get("/{document_id}", response_model=ApplicationDocumentRead, dependencies=[_READ])
 async def get_document(
-    document_id: int, service: ServiceDep
+    document_id: int, service: ServiceDep, current_user: CurrentUserDep
 ) -> ApplicationDocumentRead:
+    forbid_candidate_portal(current_user)
     try:
         return ApplicationDocumentRead.model_validate(await service.get(document_id))
     except ApplicationDocumentNotFoundError as exc:

@@ -14,6 +14,7 @@ from app.modules.org.infrastructure.models import (
     Process,
     ProfileTemplate,
 )
+from app.modules.recruitment.api.application_notes_schemas import _author_name_from_email
 from app.modules.recruitment.api.vacancies_schemas import (
     PipelineCardSchema,
     PipelineSchema,
@@ -26,12 +27,16 @@ from app.modules.recruitment.api.vacancies_schemas import (
     VacancyStageItem,
     VacancyUpdate,
 )
-from app.modules.recruitment.api.application_notes_schemas import _author_name_from_email
 from app.modules.recruitment.application.poster_generator_service import generate_vacancy_poster
 from app.modules.recruitment.application.vacancies_service import (
+    VacancyCloseError,
+    VacancyInUseError,
     VacancyNotFoundError,
     VacancyReferenceError,
     VacancyService,
+)
+from app.modules.recruitment.infrastructure.application_usage_repository import (
+    ApplicationUsageRepository,
 )
 from app.modules.recruitment.infrastructure.models import Vacancy
 from app.modules.recruitment.infrastructure.pipeline_repository import (
@@ -120,6 +125,7 @@ async def get_vacancy_public(vacancy_id: int, session: SessionDep) -> PublicVaca
 # ── Authenticated endpoints ────────────────────────────────────────────────────
 
 def get_service(session: SessionDep) -> VacancyService:
+    applications = ApplicationUsageRepository(session)
     return VacancyService(
         BaseRepository(session, Vacancy),
         BaseRepository(session, Parameter),
@@ -128,6 +134,8 @@ def get_service(session: SessionDep) -> VacancyService:
         BaseRepository(session, Department),
         BaseRepository(session, Process),
         BaseRepository(session, ProfileTemplate),
+        PipelineRepository(session),
+        applications_checker=applications.has_active_for_vacancy,
     )
 
 
@@ -230,6 +238,8 @@ async def update_vacancy(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except VacancyReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except VacancyCloseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return VacancyRead.model_validate(updated)
 
 
@@ -243,6 +253,8 @@ async def delete_vacancy(vacancy_id: int, service: ServiceDep) -> None:
         await service.delete(vacancy_id)
     except VacancyNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except VacancyInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.get(

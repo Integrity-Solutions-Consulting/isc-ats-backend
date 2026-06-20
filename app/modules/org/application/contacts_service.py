@@ -2,6 +2,7 @@ from app.core.dependencies import CurrentUser
 from app.modules.org.api.contacts_schemas import ContactCreate, ContactUpdate
 from app.modules.org.infrastructure.models import ClientCompany, Contact
 from app.shared.pagination import PageParams
+from app.shared.ports import InUseChecker
 from app.shared.repository import BaseRepository
 
 
@@ -11,6 +12,10 @@ class ContactNotFoundError(Exception):
 
 class ContactCompanyNotFoundError(Exception):
     """The referenced client_company does not exist (or is inactive)."""
+
+
+class ContactInUseError(Exception):
+    """Cannot delete a contact referenced by a live (non-closed) vacancy."""
 
 
 class ContactService:
@@ -24,9 +29,11 @@ class ContactService:
         self,
         repository: BaseRepository[Contact],
         companies: BaseRepository[ClientCompany],
+        in_use_checker: InUseChecker | None = None,
     ) -> None:
         self.repository = repository
         self.companies = companies
+        self.in_use_checker = in_use_checker
 
     async def list(
         self, params: PageParams, *, client_company_id: int | None = None
@@ -71,4 +78,8 @@ class ContactService:
 
     async def delete(self, contact_id: int) -> None:
         contact = await self.get(contact_id)
+        if self.in_use_checker is not None and await self.in_use_checker(contact_id):
+            raise ContactInUseError(
+                "No se puede eliminar el contacto: está en uso por una vacante activa."
+            )
         await self.repository.soft_delete(contact)

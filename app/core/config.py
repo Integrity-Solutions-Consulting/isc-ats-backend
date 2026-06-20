@@ -5,6 +5,7 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _DEFAULT_JWT_SECRET = "change-me-in-production"
+_DEFAULT_MINIO_CREDENTIAL = "minioadmin"
 
 
 class Settings(BaseSettings):
@@ -42,6 +43,17 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    # Rate limiting. In-memory store (per worker) — fine for the single-container
+    # Dokploy deploy; switch rate_limit_storage_uri to a redis:// URL when scaling
+    # to multiple workers/containers. Tests disable it via rate_limit_enabled=False.
+    rate_limit_enabled: bool = True
+    rate_limit_storage_uri: str = "memory://"
+
+    # Background task queue + denylist store.
+    # queue_backend: "inline" runs tasks in-process (no Redis — default, dev/test);
+    # "arq" enqueues to Redis for a separate worker to execute (production).
+    redis_url: str = "redis://localhost:6379/0"
+    queue_backend: str = "inline"
 
     # AI / LLM
     gemini_api_key: str = ""
@@ -99,6 +111,24 @@ class Settings(BaseSettings):
             raise ValueError(
                 "jwt_secret_key must be changed from the default value before running in production. "
                 "Set the JWT_SECRET_KEY environment variable to a strong random secret."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_default_minio_credentials_in_production(self) -> "Settings":
+        """Refuse to boot in production with the well-known MinIO default creds.
+
+        `minioadmin/minioadmin` is public knowledge, so shipping it would expose
+        the object store. Fail loudly instead of silently accepting it.
+        """
+        if self.is_production and (
+            self.minio_access_key == _DEFAULT_MINIO_CREDENTIAL
+            or self.minio_secret_key == _DEFAULT_MINIO_CREDENTIAL
+        ):
+            raise ValueError(
+                "minio_access_key / minio_secret_key must be changed from the default "
+                "'minioadmin' before running in production. Set MINIO_ACCESS_KEY and "
+                "MINIO_SECRET_KEY environment variables."
             )
         return self
 

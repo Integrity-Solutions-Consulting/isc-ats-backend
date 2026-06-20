@@ -5,6 +5,7 @@ from app.modules.org.api.client_companies_schemas import (
 )
 from app.modules.org.infrastructure.models import ClientCompany
 from app.shared.pagination import PageParams
+from app.shared.ports import InUseChecker
 from app.shared.repository import BaseRepository
 
 
@@ -12,11 +13,20 @@ class ClientCompanyNotFoundError(Exception):
     pass
 
 
+class ClientCompanyInUseError(Exception):
+    """Cannot delete a client with a live vacancy or active contacts/processes."""
+
+
 class ClientCompanyService:
     """Thin CRUD service for the org.client_companies catalog."""
 
-    def __init__(self, repository: BaseRepository[ClientCompany]) -> None:
+    def __init__(
+        self,
+        repository: BaseRepository[ClientCompany],
+        in_use_checker: InUseChecker | None = None,
+    ) -> None:
         self.repository = repository
+        self.in_use_checker = in_use_checker
 
     async def list(self, params: PageParams) -> tuple[list[ClientCompany], int]:
         return await self.repository.list(params)
@@ -47,4 +57,9 @@ class ClientCompanyService:
 
     async def delete(self, company_id: int) -> None:
         company = await self.get(company_id)
+        if self.in_use_checker is not None and await self.in_use_checker(company_id):
+            raise ClientCompanyInUseError(
+                "No se puede eliminar el cliente: tiene vacantes activas, "
+                "contactos o procesos asociados."
+            )
         await self.repository.soft_delete(company)
