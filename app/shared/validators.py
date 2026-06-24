@@ -61,7 +61,7 @@ def is_adult(birth_date: date, min_years: int = 18) -> bool:
     return birth_date <= cutoff
 
 
-PASSWORD_MIN_LENGTH = 10
+PASSWORD_MIN_LENGTH = 8
 _PASSWORD_SPECIALS = set("!@#$%^&*()_+-=[]{};:'\",.<>/?\\|`~")
 
 

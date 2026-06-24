@@ -16,7 +16,7 @@ _STRONG = "StrongPass123!"
 @pytest.mark.parametrize(
     "weak",
     [
-        "Short1!",          # too short (< 10)
+        "Short1!",          # too short (< 8)
         "alllowercase1!",   # no uppercase
         "ALLUPPERCASE1!",   # no lowercase
         "NoDigitsHere!",    # no digit
@@ -31,6 +31,16 @@ def test_policy_rejects_weak_passwords(weak: str) -> None:
 
 def test_policy_accepts_strong_password() -> None:
     assert password_policy_error(_STRONG) is None
+
+
+def test_policy_accepts_minimum_length_password() -> None:
+    # Exactly PASSWORD_MIN_LENGTH (8) chars with every criterion met → accepted.
+    assert password_policy_error("Abcd123!") is None
+
+
+def test_policy_rejects_below_minimum_length() -> None:
+    # 7 chars, all complexity criteria met → rejected only for being too short.
+    assert password_policy_error("Abc123!") is not None
 
 
 def test_register_schema_rejects_weak_password() -> None:
