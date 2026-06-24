@@ -17,6 +17,7 @@ import getpass
 
 from sqlalchemy import select
 
+import app.models_registry  # noqa: F401 — registers every model so FKs resolve
 from app.core.database import async_session_factory
 from app.core.security import hash_password
 from app.modules.auth.infrastructure.models import User
