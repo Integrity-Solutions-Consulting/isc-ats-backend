@@ -369,7 +369,13 @@ async def seed(session: AsyncSession) -> None:
 
 
 async def get_or_create_process_stage(
-    session: AsyncSession, *, process_id: int, stage_id: int, order: int, is_final: bool = False
+    session: AsyncSession,
+    *,
+    process_id: int,
+    stage_id: int,
+    order: int,
+    is_final: bool = False,
+    is_initial: bool = False,
 ) -> ProcessStage:
     stmt = select(ProcessStage).where(
         ProcessStage.process_id == process_id,
@@ -383,6 +389,7 @@ async def get_or_create_process_stage(
         stage_id=stage_id,
         order=order,
         is_final_positive=is_final,
+        is_initial=is_initial,
         created_by=1,
     )
     session.add(ps)
@@ -396,31 +403,35 @@ async def seed_pipeline_stages(
     print("==> Seeding process stages...")
 
     # Stage name parameters
+    postulantes = await get_or_create_param(session, type_="stage", code="applicants", name="Postulantes")
     cv = await get_or_create_param(session, type_="stage", code="cv_received", name="CV recibido")
     llamada = await get_or_create_param(session, type_="stage", code="validation_call", name="Llamada de validación")
     prueba = await get_or_create_param(session, type_="stage", code="technical_test", name="Prueba técnica")
     entrevista_hr = await get_or_create_param(session, type_="stage", code="hr_interview", name="Entrevista HR")
     entrevista_cli = await get_or_create_param(session, type_="stage", code="client_interview", name="Entrevista cliente")
-    oferta = await get_or_create_param(session, type_="stage", code="offer", name="Oferta · Contratación")
+    oferta = await get_or_create_param(session, type_="stage", code="offer", name="Contratación")
     entrevista_gen = await get_or_create_param(session, type_="stage", code="interview", name="Entrevista")
 
-    # BG · Tecnología — 5 etapas
-    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=cv.id, order=1)
-    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=llamada.id, order=2)
-    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=prueba.id, order=3)
-    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=entrevista_cli.id, order=4)
-    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=oferta.id, order=5, is_final=True)
+    # BG · Tecnología — Postulantes + 5 etapas
+    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=postulantes.id, order=1, is_initial=True)
+    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=cv.id, order=2)
+    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=llamada.id, order=3)
+    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=prueba.id, order=4)
+    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=entrevista_cli.id, order=5)
+    await get_or_create_process_stage(session, process_id=proc_bg_tech_id, stage_id=oferta.id, order=6, is_final=True)
 
-    # BP · Calidad — 4 etapas
-    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=cv.id, order=1)
-    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=entrevista_hr.id, order=2)
-    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=prueba.id, order=3)
-    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=oferta.id, order=4, is_final=True)
+    # BP · Calidad — Postulantes + 4 etapas
+    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=postulantes.id, order=1, is_initial=True)
+    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=cv.id, order=2)
+    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=entrevista_hr.id, order=3)
+    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=prueba.id, order=4)
+    await get_or_create_process_stage(session, process_id=proc_bp_qa_id, stage_id=oferta.id, order=5, is_final=True)
 
-    # Genérico — 3 etapas
-    await get_or_create_process_stage(session, process_id=proc_generic_id, stage_id=cv.id, order=1)
-    await get_or_create_process_stage(session, process_id=proc_generic_id, stage_id=entrevista_gen.id, order=2)
-    await get_or_create_process_stage(session, process_id=proc_generic_id, stage_id=oferta.id, order=3, is_final=True)
+    # Genérico — Postulantes + 3 etapas
+    await get_or_create_process_stage(session, process_id=proc_generic_id, stage_id=postulantes.id, order=1, is_initial=True)
+    await get_or_create_process_stage(session, process_id=proc_generic_id, stage_id=cv.id, order=2)
+    await get_or_create_process_stage(session, process_id=proc_generic_id, stage_id=entrevista_gen.id, order=3)
+    await get_or_create_process_stage(session, process_id=proc_generic_id, stage_id=oferta.id, order=4, is_final=True)
 
     print("   Process stages seeded.")
 
