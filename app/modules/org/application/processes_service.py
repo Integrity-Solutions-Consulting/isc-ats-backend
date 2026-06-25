@@ -1,6 +1,15 @@
 from app.core.dependencies import CurrentUser
 from app.modules.org.api.processes_schemas import ProcessCreate, ProcessUpdate
-from app.modules.org.infrastructure.models import ClientCompany, Department, Process
+from app.modules.org.infrastructure.models import (
+    ClientCompany,
+    Department,
+    Process,
+    ProcessStage,
+)
+from app.modules.org.infrastructure.parameters_repository import ParameterRepository
+from app.modules.org.infrastructure.process_stages_repository import (
+    ProcessStageRepository,
+)
 from app.modules.org.infrastructure.processes_repository import ProcessRepository
 from app.shared.pagination import PageParams
 from app.shared.ports import InUseChecker
@@ -24,7 +33,15 @@ class ProcessInUseError(Exception):
 
 
 class ProcessService:
-    """Process CRUD with double FK validation + composite-uniqueness checks."""
+    """Process CRUD with double FK validation + composite-uniqueness checks.
+
+    On create(), two fixed stages are auto-seeded in the same transaction:
+    - Postulantes (order=1, is_initial=True)  — param (stage, applicants)
+    - Contratación (order=2, is_final_positive=True) — param (stage, offer)
+
+    Both params must already exist in org.parameters (seeded via migration
+    b8c9d0e1f2a3). If either is missing ProcessReferenceError is raised.
+    """
 
     def __init__(
         self,
@@ -32,11 +49,16 @@ class ProcessService:
         companies: BaseRepository[ClientCompany],
         departments: BaseRepository[Department],
         in_use_checker: InUseChecker | None = None,
+        *,
+        stage_repository: ProcessStageRepository | None = None,
+        parameter_repository: ParameterRepository | None = None,
     ) -> None:
         self.repository = repository
         self.companies = companies
         self.departments = departments
         self.in_use_checker = in_use_checker
+        self.stage_repository = stage_repository
+        self.parameter_repository = parameter_repository
 
     async def list(
         self,
@@ -54,7 +76,9 @@ class ProcessService:
             }.items()
             if v is not None
         }
-        return await self.repository.list(params, filters=filters or None, include_inactive=include_inactive)
+        return await self.repository.list(
+            params, filters=filters or None, include_inactive=include_inactive
+        )
 
     async def get(self, process_id: int) -> Process:
         process = await self.repository.get(process_id, include_inactive=True)
@@ -95,7 +119,55 @@ class ProcessService:
             created_by=actor.user_id,
             ip_created=actor.ip,
         )
-        return await self.repository.add(process)
+        process = await self.repository.add(process)
+
+        if self.stage_repository is not None and self.parameter_repository is not None:
+            await self._seed_fixed_stages(process.id, actor)
+
+        return process
+
+    async def _seed_fixed_stages(self, process_id: int, actor: CurrentUser) -> None:
+        """Insert Postulantes (order=1) and Contratación (order=2) in the same transaction."""
+        applicants_param = await self.parameter_repository.get_by_type_and_code(  # type: ignore[union-attr]
+            "stage", "applicants"
+        )
+        if applicants_param is None:
+            raise ProcessReferenceError(
+                "Stage parameter 'applicants' not found in org.parameters. "
+                "Run migration b8c9d0e1f2a3 to seed it."
+            )
+
+        offer_param = await self.parameter_repository.get_by_type_and_code(  # type: ignore[union-attr]
+            "stage", "offer"
+        )
+        if offer_param is None:
+            raise ProcessReferenceError(
+                "Stage parameter 'offer' not found in org.parameters. "
+                "Run migration c2d3e4f5a6b7 to seed it."
+            )
+
+        await self.stage_repository.add(  # type: ignore[union-attr]
+            ProcessStage(
+                process_id=process_id,
+                stage_id=applicants_param.id,
+                order=1,
+                is_initial=True,
+                is_final_positive=False,
+                created_by=actor.user_id,
+                ip_created=actor.ip,
+            )
+        )
+        await self.stage_repository.add(  # type: ignore[union-attr]
+            ProcessStage(
+                process_id=process_id,
+                stage_id=offer_param.id,
+                order=2,
+                is_initial=False,
+                is_final_positive=True,
+                created_by=actor.user_id,
+                ip_created=actor.ip,
+            )
+        )
 
     async def update(
         self, process_id: int, data: ProcessUpdate, actor: CurrentUser

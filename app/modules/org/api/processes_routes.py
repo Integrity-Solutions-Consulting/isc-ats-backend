@@ -17,6 +17,10 @@ from app.modules.org.application.processes_service import (
     ProcessService,
 )
 from app.modules.org.infrastructure.models import ClientCompany, Department
+from app.modules.org.infrastructure.parameters_repository import ParameterRepository
+from app.modules.org.infrastructure.process_stages_repository import (
+    ProcessStageRepository,
+)
 from app.modules.org.infrastructure.processes_repository import ProcessRepository
 from app.modules.recruitment.infrastructure.vacancy_usage_repository import (
     VacancyUsageRepository,
@@ -34,6 +38,8 @@ def get_service(session: SessionDep) -> ProcessService:
         BaseRepository(session, ClientCompany),
         BaseRepository(session, Department),
         in_use_checker=lambda pid: usage.is_referenced_by_live_vacancy("process_id", pid),
+        stage_repository=ProcessStageRepository(session),
+        parameter_repository=ParameterRepository(session),
     )
 
 

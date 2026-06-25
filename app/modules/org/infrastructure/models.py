@@ -120,6 +120,7 @@ class ProcessStage(Base, AuditMixin, SoftDeleteMixin):
     )
     # "order" is a SQL reserved word — map the column name explicitly.
     order: Mapped[int] = mapped_column("order")
+    is_initial: Mapped[bool] = mapped_column(default=False, server_default="false")
     is_final_positive: Mapped[bool] = mapped_column(default=False)
 
 
