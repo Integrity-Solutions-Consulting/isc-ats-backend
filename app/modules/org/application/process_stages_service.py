@@ -29,6 +29,10 @@ class DuplicateStageError(Exception):
     """The stage is already in the process, or its order position is taken."""
 
 
+class ProcessStageProtectedError(Exception):
+    """Cannot mutate a backbone stage (is_initial or is_final_positive)."""
+
+
 class ProcessStageService:
     """Manages the ordered stages of a process, enforcing both uniqueness rules."""
 
@@ -95,10 +99,17 @@ class ProcessStageService:
         )
         return await self.repository.add(stage)
 
+    def _assert_not_protected(self, stage: ProcessStage) -> None:
+        if stage.is_initial or stage.is_final_positive:
+            raise ProcessStageProtectedError(
+                f"ProcessStage {stage.id} is a protected backbone stage and cannot be modified."
+            )
+
     async def update(
         self, process_stage_id: int, data: ProcessStageUpdate, actor: CurrentUser
     ) -> ProcessStage:
         stage = await self.get(process_stage_id)
+        self._assert_not_protected(stage)
         changes = data.model_dump(exclude_unset=True)
 
         if "stage_id" in changes:
@@ -120,6 +131,7 @@ class ProcessStageService:
 
     async def delete(self, process_stage_id: int) -> None:
         stage = await self.get(process_stage_id)
+        self._assert_not_protected(stage)
         if self.in_use_checker is not None and await self.in_use_checker(
             process_stage_id
         ):

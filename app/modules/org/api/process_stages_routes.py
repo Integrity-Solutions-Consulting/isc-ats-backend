@@ -13,6 +13,7 @@ from app.modules.org.application.process_stages_service import (
     DuplicateStageError,
     ProcessStageInUseError,
     ProcessStageNotFoundError,
+    ProcessStageProtectedError,
     ProcessStageReferenceError,
     ProcessStageService,
 )
@@ -101,6 +102,8 @@ async def update_process_stage(
         updated = await service.update(process_stage_id, data, current_user)
     except ProcessStageNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ProcessStageProtectedError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except ProcessStageReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except DuplicateStageError as exc:
@@ -118,5 +121,7 @@ async def delete_process_stage(process_stage_id: int, service: ServiceDep) -> No
         await service.delete(process_stage_id)
     except ProcessStageNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ProcessStageProtectedError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except ProcessStageInUseError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
