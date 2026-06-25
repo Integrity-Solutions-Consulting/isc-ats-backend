@@ -105,13 +105,15 @@ async def _notify_stage_change(application_id: int, new_stage_id: int) -> None:
             if candidate is None:
                 return
             user = await BaseRepository(session, User).get(candidate.user_id)
-            vacancy = await BaseRepository(session, Vacancy).get(application.vacancy_id)
+            vacancy = await BaseRepository(session, Vacancy).get(
+                application.vacancy_id, include_inactive=True
+            )
             stage = await BaseRepository(session, ProcessStage).get(new_stage_id)
             if user is None or vacancy is None or stage is None:
                 return
             params = ParameterRepository(session)
-            vacancy_name = await params.get(vacancy.vacancy_name_id)
-            stage_name = await params.get(stage.stage_id)
+            vacancy_name = await params.get(vacancy.vacancy_name_id, include_inactive=True)
+            stage_name = await params.get(stage.stage_id, include_inactive=True)
             if vacancy_name is None or stage_name is None:
                 return
 
@@ -170,11 +172,13 @@ async def _notify_rejection(application_id: int) -> None:
             if candidate is None:
                 return
             user = await BaseRepository(session, User).get(candidate.user_id)
-            vacancy = await BaseRepository(session, Vacancy).get(application.vacancy_id)
+            vacancy = await BaseRepository(session, Vacancy).get(
+                application.vacancy_id, include_inactive=True
+            )
             if user is None or vacancy is None:
                 return
             params = ParameterRepository(session)
-            vacancy_name = await params.get(vacancy.vacancy_name_id)
+            vacancy_name = await params.get(vacancy.vacancy_name_id, include_inactive=True)
             if vacancy_name is None:
                 return
 
