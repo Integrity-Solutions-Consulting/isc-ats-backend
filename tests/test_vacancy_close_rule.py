@@ -103,7 +103,7 @@ async def _setup_vacancy(session: AsyncSession, *, openings: int, hired: int) ->
         BaseRepository(session, Vacancy),
         BaseRepository(session, Candidate),
         BaseRepository(session, ProcessStage),
-        BaseRepository(session, Parameter),
+        ParameterRepository(session),
     )
     for i in range(hired):
         user = await BaseRepository(session, User).add(

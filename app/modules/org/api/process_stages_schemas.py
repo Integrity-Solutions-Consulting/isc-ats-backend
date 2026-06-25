@@ -8,6 +8,7 @@ class ProcessStageBase(BaseModel):
     stage_id: int = Field(examples=[1], description="org.parameters id of type 'stage'")
     order: int = Field(ge=1, examples=[1])
     is_final_positive: bool = False
+    is_initial: bool = False
 
 
 class ProcessStageCreate(ProcessStageBase):

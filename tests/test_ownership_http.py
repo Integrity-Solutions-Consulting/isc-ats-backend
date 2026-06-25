@@ -142,7 +142,7 @@ def _applications_service(session: AsyncSession) -> ApplicationService:
         BaseRepository(session, Vacancy),
         BaseRepository(session, Candidate),
         BaseRepository(session, ProcessStage),
-        BaseRepository(session, Parameter),
+        ParameterRepository(session),
     )
 
 

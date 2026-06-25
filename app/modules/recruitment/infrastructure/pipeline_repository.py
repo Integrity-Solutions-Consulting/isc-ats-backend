@@ -9,7 +9,10 @@ from sqlalchemy.orm import aliased
 
 from app.modules.auth.infrastructure.models import User
 from app.modules.org.infrastructure.models import Parameter, ProcessStage
-from app.modules.recruitment.infrastructure.application_models import Application, ApplicationDocument
+from app.modules.recruitment.infrastructure.application_models import (
+    Application,
+    ApplicationDocument,
+)
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.storage.infrastructure.models import File
 
@@ -20,6 +23,7 @@ class StageRow:
     name: str
     order: int
     is_final_positive: bool
+    is_initial: bool
 
 
 @dataclass
@@ -71,8 +75,8 @@ class PipelineRepository:
     async def get_pipeline(self, vacancy_id: int) -> PipelineData:
         # ── Process stages (Kanban columns) ───────────────────────────────────
         # Requires vacancy → process → process_stages → parameter (stage name)
+        from app.modules.org.infrastructure.models import Process
         from app.modules.recruitment.infrastructure.models import Vacancy
-        from app.modules.org.infrastructure.models import Process, ProcessStage as _PS
 
         StageName = aliased(Parameter, name="stage_name")
 
@@ -82,6 +86,7 @@ class PipelineRepository:
                 StageName.name.label("name"),
                 ProcessStage.order,
                 ProcessStage.is_final_positive,
+                ProcessStage.is_initial,
             )
             .join(Process, ProcessStage.process_id == Process.id)
             .join(Vacancy, Vacancy.process_id == Process.id)
@@ -143,7 +148,6 @@ class PipelineRepository:
         Only returns documents where entity_type = 'application_word' in storage.files,
         or all application_documents records with an associated file.
         """
-        from app.modules.recruitment.infrastructure.models import Vacancy
 
         StageName = aliased(Parameter, name="doc_stage_name")
 

@@ -1,7 +1,8 @@
 from typing import Any
 
 from app.core.dependencies import CurrentUser
-from app.modules.org.infrastructure.models import Parameter, ProcessStage
+from app.modules.org.infrastructure.models import ProcessStage
+from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.applications_schemas import (
     ApplicationCreate,
     ApplicationUpdate,
@@ -42,7 +43,7 @@ class ApplicationService:
         vacancies: BaseRepository[Vacancy],
         candidates: BaseRepository[Candidate],
         process_stages: BaseRepository[ProcessStage],
-        parameters: BaseRepository[Parameter],
+        parameters: ParameterRepository,
     ) -> None:
         self.repository = repository
         self.vacancies = vacancies
@@ -125,6 +126,47 @@ class ApplicationService:
         application = await self.get(application_id)
         changes = data.model_dump(exclude_unset=True)
         await self._validate_optional(changes)
+
+        # ── Terminal-transition matrix ────────────────────────────────────────
+        # Resolve the three application_status param ids (cached lazily per call).
+        rejected_param = await self.parameters.get_by_type_and_code(
+            "application_status", "rejected"
+        )
+        hired_param = await self.parameters.get_by_type_and_code(
+            "application_status", "hired"
+        )
+        active_param = await self.parameters.get_by_type_and_code(
+            "application_status", "active"
+        )
+
+        rejected_id = rejected_param.id if rejected_param is not None else None
+        hired_id = hired_param.id if hired_param is not None else None
+        active_id = active_param.id if active_param is not None else None
+
+        # Determine the resulting stage_id after this update.
+        if "current_stage_id" in changes:
+            new_stage_id = changes["current_stage_id"]
+        else:
+            new_stage_id = application.current_stage_id
+
+        existing_status_id = application.status_id
+
+        if new_stage_id is None:
+            # Stage set to None → rejection, unless already rejected.
+            if existing_status_id != rejected_id and rejected_id is not None:
+                changes["status_id"] = rejected_id
+        else:
+            # Stage is being set to a concrete stage — inspect is_final_positive.
+            new_stage = await self.process_stages.get(new_stage_id)
+            if new_stage is not None and new_stage.is_final_positive:
+                # Moving to (or staying on) a final-positive stage → hired.
+                if hired_id is not None:
+                    changes["status_id"] = hired_id
+            elif existing_status_id == hired_id and active_id is not None:
+                # Moving OFF a final-positive stage to a non-final stage → reactivate.
+                changes["status_id"] = active_id
+            # Otherwise (normal non-terminal move): status_id unchanged.
+
         changes["updated_by"] = actor.user_id
         changes["ip_updated"] = actor.ip
         return await self.repository.update(application, changes)

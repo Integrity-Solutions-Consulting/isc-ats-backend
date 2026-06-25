@@ -21,7 +21,7 @@ from app.modules.comms.application.email_templates import (
 )
 from app.modules.comms.infrastructure.email_sender_factory import build_email_sender
 from app.modules.comms.infrastructure.models import Notification
-from app.modules.org.infrastructure.models import Parameter, ProcessStage
+from app.modules.org.infrastructure.models import ProcessStage
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.applications_schemas import (
     ApplicationCreate,
@@ -78,7 +78,7 @@ def get_service(session: SessionDep) -> ApplicationService:
         BaseRepository(session, Vacancy),
         BaseRepository(session, Candidate),
         BaseRepository(session, ProcessStage),
-        BaseRepository(session, Parameter),
+        ParameterRepository(session),
     )
 
 

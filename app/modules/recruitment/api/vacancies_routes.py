@@ -276,6 +276,7 @@ async def get_vacancy_stages(vacancy_id: int, session: SessionDep) -> list[Vacan
             name=s.name,
             order=s.order,
             is_final_positive=s.is_final_positive,
+            is_initial=s.is_initial,
         )
         for s in data.stages
     ]
@@ -319,7 +320,6 @@ async def get_vacancy_documents(
 
     # Build version map per candidate (count docs ascending by date → version number)
     version_map: dict[int, int] = {}
-    result = []
     for row in reversed(rows):  # oldest first to assign version numbers
         version_map[row.candidate_id] = version_map.get(row.candidate_id, 0) + 1
 

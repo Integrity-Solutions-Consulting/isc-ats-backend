@@ -120,6 +120,7 @@ class VacancyStageItem(BaseModel):
     name: str
     order: int
     is_final_positive: bool
+    is_initial: bool = False
 
 
 class PipelineStageSchema(BaseModel):
