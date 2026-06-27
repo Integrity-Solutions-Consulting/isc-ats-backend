@@ -11,6 +11,7 @@ from sqlalchemy.pool import NullPool
 # when a test only imports a subset of the models.
 import app.models_registry  # noqa: F401
 from app.core.config import settings
+from app.core.login_throttle import InMemoryLoginThrottle
 from app.core.rate_limit import limiter
 from app.core.task_queue import get_task
 from app.core.token_denylist import InMemoryTokenDenylist
@@ -51,6 +52,14 @@ def _reset_token_denylist() -> Generator[None, None, None]:
     """Fresh denylist per test — DB ids are reused across rolled-back tests, so a
     leftover revocation marker would otherwise revoke a different test's token."""
     _app.state.token_denylist = InMemoryTokenDenylist()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_throttle() -> Generator[None, None, None]:
+    """Fresh login throttle per test so a lock from one test can't leak into the
+    next (rolled-back tests reuse emails/ids)."""
+    _app.state.login_throttle = InMemoryLoginThrottle()
     yield
 
 

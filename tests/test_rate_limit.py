@@ -3,6 +3,11 @@
 The limiter is disabled for the rest of the suite (see conftest). Here we enable
 it and confirm that bursting past the per-IP login limit yields 429 with a
 Retry-After header — the brute-force / credential-stuffing defense.
+
+These tests target the per-IP limiter specifically, so each request uses a
+DISTINCT email. That keeps the independent per-account throttle (which locks an
+email after repeated failures, see app.core.login_throttle) from firing first
+and masking the IP-level behaviour under test.
 """
 
 from collections.abc import AsyncGenerator
@@ -48,15 +53,18 @@ _LOGIN_LIMIT_COUNT = 10
 async def test_login_is_rate_limited_after_burst(
     client: AsyncClient, enabled_limiter: None
 ) -> None:
-    payload = {"email": "nobody@test.example.com", "password": "wrong-password"}
+    # Distinct email per request so the per-account throttle never trips; only the
+    # per-IP limiter is under test here.
+    def _payload(i: int) -> dict[str, str]:
+        return {"email": f"nobody{i}@test.example.com", "password": "wrong-password"}
 
     # The first N requests are processed (wrong credentials → 401), never 429.
-    for _ in range(_LOGIN_LIMIT_COUNT):
-        res = await client.post("/api/v1/auth/login", json=payload)
+    for i in range(_LOGIN_LIMIT_COUNT):
+        res = await client.post("/api/v1/auth/login", json=_payload(i))
         assert res.status_code != 429
 
     # The next one exceeds the per-IP window.
-    blocked = await client.post("/api/v1/auth/login", json=payload)
+    blocked = await client.post("/api/v1/auth/login", json=_payload(_LOGIN_LIMIT_COUNT))
     assert blocked.status_code == 429
     assert "retry-after" in {k.lower() for k in blocked.headers}
 
@@ -64,8 +72,9 @@ async def test_login_is_rate_limited_after_burst(
 async def test_login_not_limited_when_disabled(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    # With the limiter off (suite default), bursting never yields 429.
-    payload = {"email": "nobody2@test.example.com", "password": "wrong-password"}
-    for _ in range(_LOGIN_LIMIT_COUNT + 5):
+    # With the IP limiter off (suite default), bursting never yields 429. Distinct
+    # emails keep the per-account throttle out of the picture too.
+    for i in range(_LOGIN_LIMIT_COUNT + 5):
+        payload = {"email": f"nobody2-{i}@test.example.com", "password": "wrong-password"}
         res = await client.post("/api/v1/auth/login", json=payload)
         assert res.status_code != 429

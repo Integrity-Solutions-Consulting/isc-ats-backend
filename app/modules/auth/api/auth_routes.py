@@ -26,6 +26,7 @@ from app.modules.auth.api.auth_schemas import (
     VerifyRequest,
 )
 from app.modules.auth.application.auth_service import (
+    AccountLockedError,
     AuthService,
     AuthTokens,
     EmailAlreadyExistsError,
@@ -118,6 +119,7 @@ def get_service(session: SessionDep, request: Request) -> AuthService:
         parameters=ParameterRepository(session),
         has_profile_checker=candidate_has_profile,
         token_denylist=request.app.state.token_denylist,
+        login_throttle=request.app.state.login_throttle,
     )
 
 
@@ -147,6 +149,14 @@ async def login(
 ) -> TokenResponse:
     try:
         tokens = await service.login(data.email, data.password, _client_ip(request))
+    except AccountLockedError as exc:
+        # Generic message + Retry-After. Locking applies uniformly to any email,
+        # so this never reveals whether the account actually exists.
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Demasiados intentos fallidos. Intentá nuevamente más tarde.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
     except InvalidCredentialsError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
     except EmailNotVerifiedError as exc:

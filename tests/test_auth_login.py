@@ -6,8 +6,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.login_throttle import MAX_FAILED_ATTEMPTS, InMemoryLoginThrottle
 from app.core.security import hash_password
 from app.modules.auth.application.auth_service import (
+    AccountLockedError,
     AuthError,
     AuthService,
     EmailNotVerifiedError,
@@ -15,10 +17,9 @@ from app.modules.auth.application.auth_service import (
 )
 from app.modules.auth.application.bootstrap_service import (
     CANDIDATE_ROLE_NAME,
-    bootstrap_admin,
-    sync_permissions,
     ensure_candidate_role,
     grant_candidate_permissions_to_role,
+    sync_permissions,
 )
 from app.modules.auth.infrastructure.models import Role, User, UserRole
 from app.modules.auth.infrastructure.repository import (
@@ -33,6 +34,17 @@ def _service(session: AsyncSession) -> AuthService:
         UserRepository(session),
         RefreshTokenRepository(session),
         ParameterRepository(session),
+    )
+
+
+def _service_with_throttle(
+    session: AsyncSession, throttle: InMemoryLoginThrottle
+) -> AuthService:
+    return AuthService(
+        UserRepository(session),
+        RefreshTokenRepository(session),
+        ParameterRepository(session),
+        login_throttle=throttle,
     )
 
 
@@ -78,6 +90,50 @@ async def test_login_unverified_email_rejected(session: AsyncSession) -> None:
     await _make_staff_user(session, email="unverified@integrity.com.ec", verified=False)
     with pytest.raises(EmailNotVerifiedError):
         await _service(session).login("unverified@integrity.com.ec", "secret123", "127.0.0.1")
+
+
+# ---------------------------------------------------------------------------
+# login throttle — per-account brute-force lockout
+# ---------------------------------------------------------------------------
+
+
+async def test_login_locks_account_after_repeated_failures(session: AsyncSession) -> None:
+    """After MAX_FAILED_ATTEMPTS wrong passwords, even the correct password is
+    refused with AccountLockedError until the lock expires."""
+    await _make_staff_user(session, email="brute@integrity.com.ec")
+    throttle = InMemoryLoginThrottle()
+    service = _service_with_throttle(session, throttle)
+
+    for _ in range(MAX_FAILED_ATTEMPTS):
+        with pytest.raises(InvalidCredentialsError):
+            await service.login("brute@integrity.com.ec", "wrong", "127.0.0.1")
+
+    # The account is now locked: the right password is rejected too.
+    with pytest.raises(AccountLockedError) as exc_info:
+        await service.login("brute@integrity.com.ec", "secret123", "127.0.0.1")
+    assert exc_info.value.retry_after > 0
+
+
+async def test_successful_login_resets_failure_counter(session: AsyncSession) -> None:
+    """A successful login clears prior failures, so a user who mistypes then logs
+    in correctly never gets locked by later isolated typos."""
+    await _make_staff_user(session, email="reset@integrity.com.ec")
+    throttle = InMemoryLoginThrottle()
+    service = _service_with_throttle(session, throttle)
+
+    # One short of the threshold...
+    for _ in range(MAX_FAILED_ATTEMPTS - 1):
+        with pytest.raises(InvalidCredentialsError):
+            await service.login("reset@integrity.com.ec", "wrong", "127.0.0.1")
+
+    # ...then a correct login resets the counter.
+    tokens = await service.login("reset@integrity.com.ec", "secret123", "127.0.0.1")
+    assert tokens.access_token
+
+    # A fresh failure must not immediately re-lock (counter started over).
+    with pytest.raises(InvalidCredentialsError):
+        await service.login("reset@integrity.com.ec", "wrong", "127.0.0.1")
+    assert await throttle.locked_for("reset@integrity.com.ec") is None
 
 
 # ---------------------------------------------------------------------------

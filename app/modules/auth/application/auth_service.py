@@ -6,6 +6,7 @@ import jwt
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.login_throttle import LoginThrottle
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -52,6 +53,18 @@ class SamePasswordError(AuthError):
     pass
 
 
+class AccountLockedError(AuthError):
+    """Too many failed logins for this account; temporarily locked.
+
+    Carries the seconds the caller should wait before retrying, so the API can
+    surface a Retry-After header.
+    """
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("Cuenta temporalmente bloqueada por demasiados intentos")
+        self.retry_after = retry_after
+
+
 @dataclass
 class AuthTokens:
     """Login / refresh result. `portal` is the catalog CODE (hr | candidate)."""
@@ -78,12 +91,14 @@ class AuthService:
         parameters: ParameterRepository,
         has_profile_checker: ProfileChecker | None = None,
         token_denylist: TokenDenylist | None = None,
+        login_throttle: LoginThrottle | None = None,
     ) -> None:
         self.users = users
         self.refresh_tokens = refresh_tokens
         self.parameters = parameters
         self.has_profile_checker = has_profile_checker
         self.token_denylist = token_denylist
+        self.login_throttle = login_throttle
 
     async def _revoke_access_tokens(self, user_id: int) -> None:
         """Kill every access token the user currently holds (security fix 3.4).
@@ -97,16 +112,34 @@ class AuthService:
             await self.token_denylist.revoke_user(user_id, ttl)
 
     async def login(self, email: str, password: str, ip: str | None) -> AuthTokens:
+        # Account-level brute-force guard: refuse before touching the DB while the
+        # account is locked. Checked for any email (existing or not) so the
+        # behaviour can't be used to probe which emails are registered.
+        if self.login_throttle is not None:
+            locked = await self.login_throttle.locked_for(email)
+            if locked is not None:
+                raise AccountLockedError(locked)
+
         user = await self.users.get_by_email(email)
         if user is None or user.password_hash is None:
+            await self._record_login_failure(email)
             raise InvalidCredentialsError("Invalid email or password")
         if not verify_password(password, user.password_hash):
+            await self._record_login_failure(email)
             raise InvalidCredentialsError("Invalid email or password")
         if not user.email_verified:
+            # Correct credentials, just unverified — not a brute-force signal, so
+            # it neither counts as a failure nor resets the counter.
             raise EmailNotVerifiedError("Email is not verified")
 
+        if self.login_throttle is not None:
+            await self.login_throttle.reset(email)
         user.last_login_at = datetime.now(UTC)
         return await self._issue_tokens(user, ip)
+
+    async def _record_login_failure(self, email: str) -> None:
+        if self.login_throttle is not None:
+            await self.login_throttle.record_failure(email)
 
     async def refresh(self, refresh_token: str, ip: str | None) -> AuthTokens:
         try:

@@ -6,6 +6,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api_router import api_router
 from app.core.config import settings
+from app.core.login_throttle import InMemoryLoginThrottle, build_login_throttle
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.core.task_queue import InlineTaskQueue, build_task_queue
 from app.core.token_denylist import InMemoryTokenDenylist, build_token_denylist
@@ -30,10 +31,11 @@ async def lifespan(app: FastAPI):
 
         arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
         # Separate plain-Redis client: the denylist is read on every authenticated
-        # request, independent of the arq job pool.
+        # request, independent of the arq job pool. The login throttle shares it.
         denylist_redis = Redis.from_url(settings.redis_url)
     app.state.task_queue = build_task_queue(arq_pool)
     app.state.token_denylist = build_token_denylist(denylist_redis)
+    app.state.login_throttle = build_login_throttle(denylist_redis)
 
     try:
         yield
@@ -63,6 +65,7 @@ def create_app() -> FastAPI:
     # upgrades these to the Redis-backed variants when queue_backend="arq".
     app.state.task_queue = InlineTaskQueue()
     app.state.token_denylist = InMemoryTokenDenylist()
+    app.state.login_throttle = InMemoryLoginThrottle()
 
     app.add_middleware(
         CORSMiddleware,
