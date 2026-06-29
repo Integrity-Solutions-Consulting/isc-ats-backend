@@ -155,6 +155,8 @@ class ApplicationService:
             # Stage set to None → rejection, unless already rejected.
             if existing_status_id != rejected_id and rejected_id is not None:
                 changes["status_id"] = rejected_id
+            # Terminal stage has no sub-status — clear it.
+            changes["current_status_id"] = None
         else:
             # Stage is being set to a concrete stage — inspect is_final_positive.
             new_stage = await self.process_stages.get(new_stage_id)
@@ -162,6 +164,8 @@ class ApplicationService:
                 # Moving to (or staying on) a final-positive stage → hired.
                 if hired_id is not None:
                     changes["status_id"] = hired_id
+                # Terminal stage has no sub-status — clear it.
+                changes["current_status_id"] = None
             elif existing_status_id == hired_id and active_id is not None:
                 # Moving OFF a final-positive stage to a non-final stage → reactivate.
                 changes["status_id"] = active_id

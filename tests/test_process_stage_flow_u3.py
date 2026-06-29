@@ -394,3 +394,95 @@ async def test_multiple_transitions_chain(session: AsyncSession) -> None:
         app.id, ApplicationUpdate(current_stage_id=None), ACTOR
     )
     assert app.status_id == status_params["rejected"].id
+
+
+# ---------------------------------------------------------------------------
+# U3-T8: terminal transitions clear the sub-status (current_status_id)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_substatus(session: AsyncSession) -> Parameter:
+    """Create a stage_status (sub-status) parameter for assigning to an application."""
+    return await BaseRepository(session, Parameter).add(
+        Parameter(
+            type="stage_status",
+            code=uuid.uuid4().hex[:8],
+            name="Entrevista agendada",
+            created_by=1,
+        )
+    )
+
+
+async def test_move_to_final_positive_clears_substatus(session: AsyncSession) -> None:
+    """Moving to a final-positive stage (hired) must null out current_status_id."""
+    vacancy, candidate, normal_stage, final_stage, active_p = await _build_full_graph(session)
+    substatus = await _seed_substatus(session)
+
+    app = await _create_app(session, vacancy, candidate, active_p, stage=normal_stage)
+    app = await ApplicationRepository(session).update(
+        app, {"current_status_id": substatus.id}
+    )
+    assert app.current_status_id == substatus.id
+
+    updated = await _service(session).update(
+        app.id,
+        ApplicationUpdate(current_stage_id=final_stage.id),
+        ACTOR,
+    )
+    assert updated.current_status_id is None, (
+        "Sub-status must be cleared when moving to a final-positive (hired) stage"
+    )
+
+
+async def test_rejection_clears_substatus(session: AsyncSession) -> None:
+    """Rejecting (current_stage_id=None) must null out current_status_id."""
+    vacancy, candidate, normal_stage, final_stage, active_p = await _build_full_graph(session)
+    substatus = await _seed_substatus(session)
+
+    app = await _create_app(session, vacancy, candidate, active_p, stage=normal_stage)
+    app = await ApplicationRepository(session).update(
+        app, {"current_status_id": substatus.id}
+    )
+    assert app.current_status_id == substatus.id
+
+    updated = await _service(session).update(
+        app.id,
+        ApplicationUpdate(current_stage_id=None),
+        ACTOR,
+    )
+    assert updated.current_status_id is None, (
+        "Sub-status must be cleared when the candidate is rejected"
+    )
+
+
+async def test_normal_move_keeps_substatus(session: AsyncSession) -> None:
+    """A non-terminal move must NOT clear current_status_id."""
+    vacancy, candidate, normal_stage, final_stage, active_p = await _build_full_graph(session)
+    substatus = await _seed_substatus(session)
+
+    stage_param_extra = await BaseRepository(session, Parameter).add(
+        Parameter(type="stage", code=uuid.uuid4().hex[:8], name="Technical", created_by=1)
+    )
+    normal_stage_2 = await BaseRepository(session, ProcessStage).add(
+        ProcessStage(
+            process_id=normal_stage.process_id,
+            stage_id=stage_param_extra.id,
+            order=3,
+            is_final_positive=False,
+            created_by=1,
+        )
+    )
+
+    app = await _create_app(session, vacancy, candidate, active_p, stage=normal_stage)
+    app = await ApplicationRepository(session).update(
+        app, {"current_status_id": substatus.id}
+    )
+
+    updated = await _service(session).update(
+        app.id,
+        ApplicationUpdate(current_stage_id=normal_stage_2.id),
+        ACTOR,
+    )
+    assert updated.current_status_id == substatus.id, (
+        "Sub-status must be preserved on a normal (non-terminal) stage move"
+    )

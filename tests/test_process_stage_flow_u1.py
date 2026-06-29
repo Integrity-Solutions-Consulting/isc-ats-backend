@@ -4,7 +4,7 @@ Tests cover:
 - ProcessStage.is_initial attribute exists, defaults False.
 - Column persists round-trip (flush → refresh).
 - Seed param (type='stage', code='applicants') present in DB after migration.
-- 'offer' parameter renamed to 'Contratación'.
+- 'offer' parameter renamed to 'Contratados'.
 """
 
 import uuid
@@ -101,8 +101,8 @@ async def test_applicants_stage_param_exists(session: AsyncSession) -> None:
     assert param.is_active is True
 
 
-async def test_offer_param_renamed_to_contratacion(session: AsyncSession) -> None:
-    """Migration must have renamed (stage, offer) from 'Oferta · Contratación' to 'Contratación'."""
+async def test_offer_param_renamed_to_contratados(session: AsyncSession) -> None:
+    """Migration must have renamed (stage, offer) to 'Contratados' (terminal-positive label)."""
     param = await ParameterRepository(session).get_by_type_and_code("stage", "offer")
     assert param is not None, "Parameter (stage, offer) must exist"
-    assert param.name == "Contratación", f"Expected 'Contratación', got '{param.name}'"
+    assert param.name == "Contratados", f"Expected 'Contratados', got '{param.name}'"
