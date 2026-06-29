@@ -146,6 +146,72 @@ def render_account_exists_email(login_url: str) -> RenderedEmail:
     return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
 
 
+def render_password_reset_email(reset_url: str) -> RenderedEmail:
+    """Password-reset email (Spanish, Ecuador).
+
+    `reset_url` is the full link to the frontend page where the user sets a new
+    password; it embeds the single-use reset token as a query parameter.
+    """
+    subject = "Restablece tu contraseña — Integrity Solutions"
+
+    text_body = (
+        "Recibimos una solicitud para restablecer la contraseña de tu cuenta.\n\n"
+        "Para elegir una nueva contraseña, abre este enlace:\n"
+        f"{reset_url}\n\n"
+        "El enlace vence en 1 hora y solo puede usarse una vez. Si no solicitaste "
+        "este cambio, ignora este correo: tu contraseña actual seguirá funcionando."
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html lang="es">
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="background:{_PRIMARY};padding:24px 32px;color:#ffffff;font-size:18px;font-weight:bold;">
+                Integrity Solutions
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;color:#111827;">
+                <h1 style="margin:0 0 12px;font-size:22px;">Restablece tu contraseña</h1>
+                <p style="margin:0 0 24px;font-size:15px;line-height:1.5;color:#374151;">
+                  Recibimos una solicitud para restablecer la contraseña de tu cuenta.
+                  Haz clic en el siguiente botón para elegir una nueva.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="border-radius:8px;background:{_PRIMARY};">
+                      <a href="{reset_url}"
+                         style="display:inline-block;padding:14px 28px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;">
+                        Restablecer contraseña
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0;font-size:13px;line-height:1.5;color:#6b7280;">
+                  Si el botón no funciona, copia y pega este enlace en tu navegador:<br/>
+                  <a href="{reset_url}" style="color:{_PRIMARY};word-break:break-all;">{reset_url}</a>
+                </p>
+                <p style="margin:24px 0 0;font-size:13px;color:#6b7280;">
+                  El enlace vence en 1 hora y solo puede usarse una vez. Si no solicitaste
+                  este cambio, ignora este correo: tu contraseña actual seguirá funcionando.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+
+    return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
+
+
 def render_interview_invitation_email(
     candidate_first_name: str,
     vacancy_name: str,

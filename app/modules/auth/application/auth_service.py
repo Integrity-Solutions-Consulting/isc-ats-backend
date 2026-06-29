@@ -13,6 +13,7 @@ from app.core.security import (
     decode_token,
     hash_password,
     hash_token,
+    password_fingerprint,
     verify_password,
 )
 from app.core.token_denylist import TokenDenylist
@@ -286,6 +287,48 @@ class AuthService:
         await self.users.session.flush()
         await self.refresh_tokens.revoke_all_by_user_id(user_id)
         await self._revoke_access_tokens(user_id)
+
+    async def get_user_for_password_reset(self, email: str) -> User | None:
+        """Return the user eligible for a password reset, or None.
+
+        Eligible = exists, is verified, and has a password set. Returns None
+        otherwise so the caller can answer generically without revealing whether
+        the email is registered (anti-enumeration, like resend-verification).
+        """
+        user = await self.users.get_by_email(email)
+        if user is None or not user.email_verified or user.password_hash is None:
+            return None
+        return user
+
+    async def reset_password(self, token: str, new_password: str) -> None:
+        """Set a new password from a reset token (forgot-password flow).
+
+        The token is single-use: it carries a fingerprint of the password it was
+        issued against, so once the password changes the token no longer matches
+        and cannot be replayed. Revokes all sessions on success, like
+        change_password.
+        """
+        try:
+            payload = decode_token(token)
+        except jwt.PyJWTError as exc:
+            raise InvalidTokenError("El enlace es inválido o ha expirado") from exc
+
+        if payload.get("type") != "password_reset":
+            raise InvalidTokenError("El enlace es inválido o ha expirado")
+
+        user = await self.users.get(int(payload.get("sub", 0)))
+        if user is None or user.password_hash is None:
+            raise InvalidTokenError("El enlace es inválido o ha expirado")
+
+        # Single-use guard: reject a token minted against a now-stale password.
+        if payload.get("pwf") != password_fingerprint(user.password_hash):
+            raise InvalidTokenError("El enlace ya fue utilizado o ha expirado")
+
+        user.password_hash = hash_password(new_password)
+        user.must_change_password = False
+        await self.users.session.flush()
+        await self.refresh_tokens.revoke_all_by_user_id(user.id)
+        await self._revoke_access_tokens(user.id)
 
     async def verify_email(self, token: str) -> None:
         try:

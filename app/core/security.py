@@ -59,6 +59,29 @@ def create_verification_token(subject: str | int) -> str:
     )
 
 
+def password_fingerprint(password_hash: str) -> str:
+    """Short, stable fingerprint of a password hash.
+
+    Embedded in password-reset tokens to make them single-use without any
+    server-side storage: resetting the password re-hashes it (bcrypt uses a
+    random salt, so even the same password yields a new hash), which changes the
+    fingerprint and invalidates every token issued against the previous hash.
+    """
+    import hashlib
+
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:16]
+
+
+def create_password_reset_token(subject: str | int, password_hash: str) -> str:
+    """Stateless, single-use reset token (1h). Bound to the current password via
+    a fingerprint claim so it cannot be replayed after the password changes."""
+    return _create_token(
+        subject,
+        timedelta(hours=1),
+        "password_reset",
+        {"pwf": password_fingerprint(password_hash)},
+    )
+
 
 def hash_token(token: str) -> str:
     """Deterministic hash for refresh-token persistence (lookup by hash, never store raw)."""

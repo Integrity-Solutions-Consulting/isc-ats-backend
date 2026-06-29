@@ -46,6 +46,9 @@ REFRESH_LIMIT = "30/minute"
 REGISTER_LIMIT = "5/hour"
 RESEND_LIMIT = "5/hour"
 CHANGE_PASSWORD_LIMIT = "10/minute"
+# Reset request triggers an email — keep tight to bound abuse / mail cost.
+FORGOT_PASSWORD_LIMIT = "5/hour"
+RESET_PASSWORD_LIMIT = "10/hour"
 # Expensive (Gemini call) — keep tight to bound cost abuse.
 CV_PREFILL_LIMIT = "20/hour"
 UPLOAD_LIMIT = "60/hour"

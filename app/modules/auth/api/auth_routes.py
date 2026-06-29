@@ -8,20 +8,24 @@ from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.core.rate_limit import (
     CHANGE_PASSWORD_LIMIT,
+    FORGOT_PASSWORD_LIMIT,
     LOGIN_LIMIT,
     REFRESH_LIMIT,
     REGISTER_LIMIT,
     RESEND_LIMIT,
+    RESET_PASSWORD_LIMIT,
     limiter,
 )
-from app.core.security import create_verification_token
+from app.core.security import create_password_reset_token, create_verification_token
 from app.core.task_queue import TaskQueueDep, register_task
 from app.modules.auth.api.auth_schemas import (
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
     ResendVerificationRequest,
+    ResetPasswordRequest,
     TokenResponse,
     VerifyRequest,
 )
@@ -44,6 +48,7 @@ from app.modules.comms.application.email_dispatch_service import EmailDispatchSe
 from app.modules.comms.application.email_sender import EmailMessage
 from app.modules.comms.application.email_templates import (
     render_account_exists_email,
+    render_password_reset_email,
     render_verification_email,
 )
 from app.modules.comms.infrastructure.email_sender_factory import build_email_sender
@@ -78,7 +83,10 @@ async def _send_verification_email(user_id: int, to_email: str) -> None:
             success = await dispatch.send(message)
             await session.commit()
             if not success:
-                logger.error("Verification email delivery failed for %s — check comms.email_logs", to_email)
+                logger.error(
+                    "Verification email delivery failed for %s — check comms.email_logs",
+                    to_email,
+                )
         except Exception:
             logger.exception("Unexpected error sending verification email to %s", to_email)
             await session.rollback()
@@ -106,6 +114,41 @@ async def _send_account_exists_email(to_email: str) -> None:
             await session.commit()
         except Exception:
             logger.exception("Failed to send account-exists email to %s", to_email)
+            await session.rollback()
+
+
+async def _send_password_reset_email(user_id: int, to_email: str) -> None:
+    """Background task: mint a single-use reset token and email the reset link.
+
+    Runs with its own DB session: it loads the user to read the current password
+    hash, which the token is bound to (fingerprint) so the link is single-use.
+    Never propagates — the request already answered generically, so a send
+    failure must not surface; it's recorded in comms.email_logs.
+    """
+    async with async_session_factory() as session:
+        try:
+            user = await UserRepository(session).get(user_id)
+            if user is None or user.password_hash is None:
+                return
+            token = create_password_reset_token(user_id, user.password_hash)
+            reset_url = f"{settings.frontend_base_url}/restablecer-contrasena?token={token}"
+            rendered = render_password_reset_email(reset_url)
+            message = EmailMessage(
+                to_email=to_email,
+                subject=rendered.subject,
+                html_body=rendered.html_body,
+                text_body=rendered.text_body,
+            )
+            dispatch = EmailDispatchService(session, build_email_sender())
+            success = await dispatch.send(message)
+            await session.commit()
+            if not success:
+                logger.error(
+                    "Password-reset email delivery failed for %s — check comms.email_logs",
+                    to_email,
+                )
+        except Exception:
+            logger.exception("Unexpected error sending password-reset email to %s", to_email)
             await session.rollback()
 
 
@@ -242,6 +285,39 @@ async def resend_verification(
     }
 
 
+@router.post("/forgot-password", status_code=status.HTTP_200_OK)
+@limiter.limit(FORGOT_PASSWORD_LIMIT)
+async def forgot_password(
+    data: ForgotPasswordRequest,
+    service: ServiceDep,
+    request: Request,
+    task_queue: TaskQueueDep,
+):
+    # Generic response regardless of outcome: never reveal whether an email is
+    # registered. The reset email is only sent for a real, eligible account.
+    user = await service.get_user_for_password_reset(data.email)
+    if user is not None:
+        await task_queue.enqueue("send_password_reset_email", user.id, user.email)
+    return {
+        "message": "Si el correo está registrado, te enviamos un enlace para "
+        "restablecer tu contraseña."
+    }
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+@limiter.limit(RESET_PASSWORD_LIMIT)
+async def reset_password(
+    data: ResetPasswordRequest,
+    service: ServiceDep,
+    request: Request,
+):
+    try:
+        await service.reset_password(data.token, data.new_password)
+    except InvalidTokenError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return {"message": "Contraseña restablecida exitosamente"}
+
+
 @router.post("/me/change-password", status_code=status.HTTP_200_OK)
 @limiter.limit(CHANGE_PASSWORD_LIMIT)
 async def change_password(
@@ -281,3 +357,4 @@ async def delete_me(
 # ── Background task registration (durable queue / inline) ─────────────────────
 register_task("send_verification_email", _send_verification_email)
 register_task("send_account_exists_email", _send_account_exists_email)
+register_task("send_password_reset_email", _send_password_reset_email)

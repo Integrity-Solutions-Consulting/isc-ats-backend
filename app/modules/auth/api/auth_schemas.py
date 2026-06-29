@@ -55,3 +55,14 @@ class VerifyRequest(BaseModel):
 class ResendVerificationRequest(BaseModel):
     email: EmailStr
 
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(max_length=72)
+
+    _validate_new_password = field_validator("new_password")(_enforce_password_policy)
+
