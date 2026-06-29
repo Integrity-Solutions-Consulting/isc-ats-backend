@@ -39,6 +39,13 @@ SMTP config):
 |-----------------|-----------------------------------------|------------------|
 | `REDIS_URL`     | `redis://[:password@]<redis-host>:6379/0` | Backend + Worker |
 | `QUEUE_BACKEND` | `arq`                                   | Backend (+ Worker, harmless) |
+| `TRUST_PROXY_HEADERS` | `true`                            | Backend |
+
+> `TRUST_PROXY_HEADERS=true` makes per-IP rate limits (and audit IPs) key on the
+> real client instead of the Next.js proxy. The frontend proxy forwards the real
+> IP in `X-Real-Client-IP`; the backend honours it only with this flag on. Set it
+> only because the backend is unreachable directly (internal network) — never on a
+> directly-exposed API, where a client could set the header itself.
 
 > The worker only strictly needs `REDIS_URL` — it is always the Arq consumer and
 > ignores `QUEUE_BACKEND`. The API needs `QUEUE_BACKEND=arq` to route to Redis.

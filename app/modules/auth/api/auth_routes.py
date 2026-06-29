@@ -3,6 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from app.core.client_ip import get_client_ip
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUserDep, SessionDep
@@ -180,7 +181,7 @@ def _to_response(tokens: AuthTokens) -> TokenResponse:
 
 
 def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+    return get_client_ip(request)
 
 
 @router.post("/login", response_model=TokenResponse)

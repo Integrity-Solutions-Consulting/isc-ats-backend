@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import get_client_ip
 from app.core.database import get_session
 from app.core.security import decode_token
 
@@ -60,7 +61,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    ip = request.client.host if request.client else None
+    ip = get_client_ip(request)
     return CurrentUser(user_id=user_id, ip=ip, portal=payload.get("portal"))
 
 

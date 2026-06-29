@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     # to multiple workers/containers. Tests disable it via rate_limit_enabled=False.
     rate_limit_enabled: bool = True
     rate_limit_storage_uri: str = "memory://"
+    # Trust the X-Real-Client-IP header for rate limiting and audit. The API sits
+    # behind the Next.js proxy on an internal network, so the peer address is the
+    # proxy, not the user — without this, per-IP limits are shared across all
+    # users. Enable ONLY in deployments where the backend is unreachable directly
+    # and the proxy always sets the header (production behind Dokploy). Off by
+    # default so a directly-exposed dev backend never trusts a client-set header.
+    trust_proxy_headers: bool = False
 
     # Background task queue + denylist store.
     # queue_backend: "inline" runs tasks in-process (no Redis — default, dev/test);

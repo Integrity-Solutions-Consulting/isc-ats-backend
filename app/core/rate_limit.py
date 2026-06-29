@@ -12,12 +12,14 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
+from app.core.client_ip import get_client_ip
 from app.core.config import settings
 
 limiter = Limiter(
-    key_func=get_remote_address,
+    # Key on the real client IP (proxy-aware), not the Next.js peer — otherwise
+    # every user shares a single bucket.
+    key_func=get_client_ip,
     storage_uri=settings.rate_limit_storage_uri,
     enabled=settings.rate_limit_enabled,
 )
