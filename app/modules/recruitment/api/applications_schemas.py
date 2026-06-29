@@ -29,6 +29,7 @@ class ApplicationRead(BaseModel):
     status_id: int
     current_stage_id: int | None = None
     current_status_id: int | None = None
+    rejected_at_stage_id: int | None = None
     salary_expectation: Decimal | None = None
     # AI-managed, read-only.
     match_score: Decimal | None = None

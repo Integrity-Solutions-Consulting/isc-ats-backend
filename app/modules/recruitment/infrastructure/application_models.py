@@ -46,6 +46,11 @@ class Application(Base, AuditMixin, SoftDeleteMixin):
     current_status_id: Mapped[int | None] = mapped_column(
         _fk("org.parameters.id"), default=None
     )
+    # Stage the candidate had reached when rejected (current_stage_id is nulled on
+    # rejection). Lets the candidate UI show how far they advanced.
+    rejected_at_stage_id: Mapped[int | None] = mapped_column(
+        _fk("org.process_stages.id"), default=None
+    )
     status_id: Mapped[int] = mapped_column(_fk("org.parameters.id"))
     salary_expectation: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), default=None)
     match_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), default=None)

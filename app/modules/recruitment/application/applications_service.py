@@ -155,6 +155,9 @@ class ApplicationService:
             # Stage set to None → rejection, unless already rejected.
             if existing_status_id != rejected_id and rejected_id is not None:
                 changes["status_id"] = rejected_id
+                # Remember the stage they had reached before current_stage_id is
+                # nulled, so the candidate UI can show how far they advanced.
+                changes["rejected_at_stage_id"] = application.current_stage_id
             # Terminal stage has no sub-status — clear it.
             changes["current_status_id"] = None
         else:
