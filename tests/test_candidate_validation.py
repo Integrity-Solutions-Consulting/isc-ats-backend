@@ -18,6 +18,7 @@ from app.shared.validators import (
     is_adult,
     is_valid_cedula_ec,
     is_valid_id_number,
+    is_valid_phone,
     is_valid_phone_ec,
 )
 
@@ -74,6 +75,18 @@ def test_phone_local_and_intl():
     assert is_valid_phone_ec("0891234567") is False  # must start with 09
 
 
+def test_is_valid_phone_accepts_ec_and_foreign():
+    # Mirrors the frontend validatePhone used by onboarding: EC mobile OR any
+    # international E.164. Foreign candidates (common in the EC job market) must
+    # not be rejected after the browser already accepted their number.
+    assert is_valid_phone("0991234567") is True       # EC local
+    assert is_valid_phone("+593991234567") is True     # EC international
+    assert is_valid_phone("+12025551234") is True      # foreign E.164
+    assert is_valid_phone("+571234567") is True        # foreign E.164
+    assert is_valid_phone("123") is False              # too short, no +
+    assert is_valid_phone("+12") is False              # below E.164 minimum
+
+
 def test_is_adult():
     assert is_adult(date(2000, 1, 1)) is True
     minor = date.today().replace(year=date.today().year - 10)
@@ -109,6 +122,11 @@ def test_create_rejects_invalid_phone():
 
 def test_create_accepts_intl_phone():
     assert _create(phone="+593991234567").phone == "+593991234567"
+
+
+def test_create_accepts_foreign_intl_phone():
+    # A foreign E.164 number the onboarding form accepts must not 422 server-side.
+    assert _create(phone="+12025551234").phone == "+12025551234"
 
 
 def test_create_rejects_minor():

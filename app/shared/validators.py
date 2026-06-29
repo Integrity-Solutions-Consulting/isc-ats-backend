@@ -10,6 +10,7 @@ from datetime import date
 _CEDULA_RE = re.compile(r"^\d{10}$")
 _PHONE_LOCAL_RE = re.compile(r"^09\d{8}$")
 _PHONE_INTL_RE = re.compile(r"^\+5939\d{8}$")
+_PHONE_E164_RE = re.compile(r"^\+\d{7,15}$")
 _CEDULA_COEFFICIENTS = (2, 1, 2, 1, 2, 1, 2, 1, 2)
 
 
@@ -50,6 +51,14 @@ def is_valid_phone_ec(value: str) -> bool:
     return bool(_PHONE_LOCAL_RE.match(value) or _PHONE_INTL_RE.match(value))
 
 
+def is_valid_phone(value: str) -> bool:
+    """Accept an Ecuadorian mobile or any international E.164 number (+ and 7–15
+    digits). Mirrors the frontend `validatePhone` used by the onboarding form, so
+    a foreign candidate's number that the browser accepts is not rejected by the
+    API. Use this for candidate input; `is_valid_phone_ec` stays EC-strict."""
+    return is_valid_phone_ec(value) or bool(_PHONE_E164_RE.match(value))
+
+
 def is_adult(birth_date: date, min_years: int = 18) -> bool:
     """True when `birth_date` is at least `min_years` years before today.
     Future dates are therefore rejected too."""
@@ -62,7 +71,10 @@ def is_adult(birth_date: date, min_years: int = 18) -> bool:
 
 
 PASSWORD_MIN_LENGTH = 8
-_PASSWORD_SPECIALS = set("!@#$%^&*()_+-=[]{};:'\",.<>/?\\|`~")
+# A "special" character is any non-alphanumeric one — mirrors the frontend rule
+# (/[^a-zA-Z0-9]/). A fixed allowlist would reject chars common on EC/Spanish
+# keyboards (¿ ¡ €) that the browser already accepted, breaking registration.
+_PASSWORD_SPECIAL_RE = re.compile(r"[^a-zA-Z0-9]")
 
 
 def password_policy_error(value: str) -> str | None:
@@ -80,6 +92,6 @@ def password_policy_error(value: str) -> str | None:
         return "La contraseña debe incluir al menos una letra mayúscula"
     if not any(c.isdigit() for c in value):
         return "La contraseña debe incluir al menos un número"
-    if not any(c in _PASSWORD_SPECIALS for c in value):
+    if not _PASSWORD_SPECIAL_RE.search(value):
         return "La contraseña debe incluir al menos un carácter especial"
     return None

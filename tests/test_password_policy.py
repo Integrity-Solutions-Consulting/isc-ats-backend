@@ -38,6 +38,14 @@ def test_policy_accepts_minimum_length_password() -> None:
     assert password_policy_error("Abcd123!") is None
 
 
+def test_policy_accepts_non_ascii_special_char() -> None:
+    # The frontend counts any non-alphanumeric as the special char ([^a-zA-Z0-9]).
+    # Spanish/EC keyboards commonly use ¿ ¡ €; the backend must accept them too,
+    # or a password the browser approved is rejected at registration.
+    assert password_policy_error("Abcd123¿") is None
+    assert password_policy_error("Contra123€") is None
+
+
 def test_policy_rejects_below_minimum_length() -> None:
     # 7 chars, all complexity criteria met → rejected only for being too short.
     assert password_policy_error("Abc123!") is not None

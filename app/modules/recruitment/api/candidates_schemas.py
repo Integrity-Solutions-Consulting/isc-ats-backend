@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.shared.validators import (
     is_adult,
     is_valid_id_number,
-    is_valid_phone_ec,
+    is_valid_phone,
 )
 
 
@@ -45,7 +45,7 @@ class _CandidateInputValidators(BaseModel):
         stripped = v.strip()
         if not stripped:
             return None
-        if not is_valid_phone_ec(stripped):
+        if not is_valid_phone(stripped):
             raise ValueError("Número de celular inválido (ej: 0991234567)")
         return stripped
 
