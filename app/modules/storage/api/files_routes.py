@@ -175,7 +175,7 @@ async def upload_file(
     file: Annotated[UploadFile, FastAPIFile(...)],
     service: ServiceDep,
     current_user: CurrentUserDep,
-    entity_type: Annotated[str, Form()] = "cv",
+    entity_type: Annotated[str, Form()],
     entity_id: Annotated[int | None, Form()] = None,
 ) -> FileRead:
     """Upload a file to MinIO and record its metadata in storage.files.
@@ -183,6 +183,11 @@ async def upload_file(
     Accessible by any authenticated user (candidates upload their own CVs;
     staff can upload attachments). No extra permission gate — authentication is
     the gate.
+
+    `entity_type` is required: it drives the content-type allowlist, so a wrong
+    or missing value would mislabel files and reject valid ones. Callers must
+    state it explicitly (e.g. "cv", "avatar") rather than rely on a silent
+    default.
 
     `entity_id` optionally associates the file with a specific entity record
     (e.g. vacancy_id when entity_type is "vacancy_image").

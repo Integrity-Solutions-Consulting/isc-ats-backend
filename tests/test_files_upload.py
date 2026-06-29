@@ -1,7 +1,7 @@
 """Tests for POST /storage/files/upload — entity_type handling.
 
 Covers:
-- Default entity_type is "cv" (schema.sql vocabulary, no longer hardcoded).
+- entity_type is REQUIRED — a missing field is a 422, never a silent default.
 - Explicit entity_type from the allowed vocabulary is persisted.
 - Unknown entity_type → 422 before anything is uploaded to MinIO.
 """
@@ -60,17 +60,20 @@ def _png_upload() -> dict:
     return {"file": ("avatar.png", png, "image/png")}
 
 
-async def test_upload_defaults_entity_type_to_cv(
+async def test_upload_requires_entity_type(
     client: AsyncClient, session: AsyncSession
 ) -> None:
+    # entity_type is mandatory: omitting it is a validation error, never a silent
+    # default. A wrong default would mislabel files and reject valid ones (e.g. an
+    # avatar validated against the cv (pdf-only) allowlist).
     user = await _make_user(session)
     res = await client.post(
         "/api/v1/storage/files/upload",
         headers=_bearer(user.id),
         files=_pdf_upload(),
     )
-    assert res.status_code == 201
-    assert res.json()["entity_type"] == "cv"
+    assert res.status_code == 422
+    assert "entity_type" in res.text
 
 
 async def test_upload_accepts_explicit_entity_type(
