@@ -17,6 +17,7 @@ from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.recruitment.infrastructure.models import Vacancy
 from app.modules.talent.api.talent_pool_schemas import TalentPoolCreate
 from app.modules.talent.application.talent_pool_service import (
+    DuplicateTalentPoolError,
     TalentPoolNotFoundError,
     TalentPoolReferenceError,
     TalentPoolService,
@@ -134,6 +135,57 @@ async def test_delete_soft_deletes(session: AsyncSession) -> None:
 
     with pytest.raises(TalentPoolNotFoundError):
         await svc.get(entry.id)
+
+
+async def test_create_rejects_duplicate_same_vacancy(session: AsyncSession) -> None:
+    candidate = await _make_candidate(session)
+    vacancy = await _make_vacancy(session)
+    svc = _service(session)
+    await svc.create(
+        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
+    )
+    with pytest.raises(DuplicateTalentPoolError):
+        await svc.create(
+            TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
+        )
+
+
+async def test_create_allows_same_candidate_different_vacancies(
+    session: AsyncSession,
+) -> None:
+    candidate = await _make_candidate(session)
+    v1 = await _make_vacancy(session)
+    v2 = await _make_vacancy(session)
+    svc = _service(session)
+    e1 = await svc.create(
+        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=v1.id), ACTOR
+    )
+    e2 = await svc.create(
+        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=v2.id), ACTOR
+    )
+    assert e1.id != e2.id
+
+
+async def test_create_rejects_duplicate_general_entry(session: AsyncSession) -> None:
+    candidate = await _make_candidate(session)
+    svc = _service(session)
+    await svc.create(TalentPoolCreate(candidate_id=candidate.id), ACTOR)
+    with pytest.raises(DuplicateTalentPoolError):
+        await svc.create(TalentPoolCreate(candidate_id=candidate.id), ACTOR)
+
+
+async def test_create_allows_readd_after_remove(session: AsyncSession) -> None:
+    candidate = await _make_candidate(session)
+    vacancy = await _make_vacancy(session)
+    svc = _service(session)
+    e1 = await svc.create(
+        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
+    )
+    await svc.delete(e1.id)
+    e2 = await svc.create(
+        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
+    )
+    assert e2.id != e1.id
 
 
 async def test_list_filtered_by_candidate(session: AsyncSession) -> None:

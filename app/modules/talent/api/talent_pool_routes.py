@@ -8,6 +8,7 @@ from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.recruitment.infrastructure.models import Vacancy
 from app.modules.talent.api.talent_pool_schemas import TalentPoolCreate, TalentPoolRead
 from app.modules.talent.application.talent_pool_service import (
+    DuplicateTalentPoolError,
     TalentPoolNotFoundError,
     TalentPoolReferenceError,
     TalentPoolService,
@@ -76,6 +77,8 @@ async def add_to_talent_pool(
         created = await service.create(data, current_user)
     except TalentPoolReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except DuplicateTalentPoolError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return TalentPoolRead.model_validate(created)
 
 

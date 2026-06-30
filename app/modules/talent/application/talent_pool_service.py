@@ -15,6 +15,10 @@ class TalentPoolReferenceError(Exception):
     """A referenced candidate or vacancy does not exist."""
 
 
+class DuplicateTalentPoolError(Exception):
+    """The candidate is already in the talent pool for this source vacancy."""
+
+
 class TalentPoolService:
     def __init__(
         self,
@@ -59,6 +63,20 @@ class TalentPoolService:
                 raise TalentPoolReferenceError(
                     f"source_vacancy_id={data.source_vacancy_id} not found"
                 )
+        # A candidate may be saved multiple times, but only once per source
+        # vacancy (source_vacancy_id None == the general pool). Reject repeats so
+        # re-adding the same pair never silently duplicates the entry.
+        _, existing = await self.repository.list(
+            PageParams(page=1, size=1),
+            filters={
+                "candidate_id": data.candidate_id,
+                "source_vacancy_id": data.source_vacancy_id,
+            },
+        )
+        if existing > 0:
+            raise DuplicateTalentPoolError(
+                "El candidato ya está en el banco de talento para esta vacante."
+            )
         entry = TalentPool(
             **data.model_dump(),
             created_by=actor.user_id,
