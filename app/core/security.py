@@ -1,3 +1,4 @@
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -33,6 +34,10 @@ def _create_token(
         "type": token_type,
         "iat": now,
         "exp": now + expires_delta,
+        # Unique nonce so two tokens for the same subject minted in the same
+        # second are never byte-identical — otherwise their hash collides on
+        # uq_refresh_tokens_token_hash and refresh rotation fails.
+        "jti": secrets.token_urlsafe(16),
     }
     if extra_claims:
         payload.update(extra_claims)
