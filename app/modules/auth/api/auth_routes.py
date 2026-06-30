@@ -30,6 +30,7 @@ from app.modules.auth.api.auth_schemas import (
     TokenResponse,
     VerifyRequest,
 )
+from app.modules.auth.api.authorization import PermissionCodesDep
 from app.modules.auth.application.auth_service import (
     AccountLockedError,
     AuthService,
@@ -335,6 +336,17 @@ async def change_password(
     except (InvalidCredentialsError, SamePasswordError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return {"message": "Contraseña actualizada exitosamente"}
+
+
+@router.get("/me/permissions")
+async def my_permissions(codes: PermissionCodesDep) -> dict[str, list[str]]:
+    """The authenticated user's effective permission codes.
+
+    Lets the frontend hide menu entries and guard routes the user cannot use.
+    This is UX defense-in-depth only — every endpoint still enforces its own
+    permission server-side, so an altered response cannot grant real access.
+    """
+    return {"permissions": sorted(codes)}
 
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
