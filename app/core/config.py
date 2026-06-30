@@ -109,15 +109,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_default_jwt_secret_in_production(self) -> "Settings":
-        """Prevent the application from booting in production with the well-known default JWT secret.
+        """Refuse to boot in production with the well-known default JWT secret.
 
         Anyone who knows the default value can forge valid tokens, so we fail loudly
         rather than silently accepting an insecure configuration.
         """
         if self.is_production and self.jwt_secret_key == _DEFAULT_JWT_SECRET:
             raise ValueError(
-                "jwt_secret_key must be changed from the default value before running in production. "
-                "Set the JWT_SECRET_KEY environment variable to a strong random secret."
+                "jwt_secret_key must be changed from the default value before "
+                "running in production. Set the JWT_SECRET_KEY environment "
+                "variable to a strong random secret."
             )
         return self
 

@@ -38,8 +38,8 @@ from sqlalchemy import select
 import app.models_registry  # noqa: F401
 from app.core.database import async_session_factory
 from app.modules.recruitment.infrastructure.vacancies_repository import VacanciesExpandedRepository
-from app.modules.storage.infrastructure.models import File
 from app.modules.storage.infrastructure.minio_client import minio_client
+from app.modules.storage.infrastructure.models import File
 
 logger = logging.getLogger(__name__)
 
@@ -354,5 +354,7 @@ async def generate_vacancy_poster(vacancy_id: int) -> bytes:
     mode = "photo" if base_image_bytes else "gradient"
     logger.info("Generating PyMuPDF poster for vacancy %d (mode=%s)", vacancy_id, mode)
     image_bytes: bytes = await asyncio.to_thread(_build_poster, vacancy, base_image_bytes)
-    logger.info("Poster ready: vacancy=%d mode=%s size=%d bytes", vacancy_id, mode, len(image_bytes))
+    logger.info(
+        "Poster ready: vacancy=%d mode=%s size=%d bytes", vacancy_id, mode, len(image_bytes)
+    )
     return image_bytes
