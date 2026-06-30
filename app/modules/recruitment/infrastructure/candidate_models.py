@@ -32,6 +32,9 @@ class Candidate(Base, AuditMixin, SoftDeleteMixin):
     user_id: Mapped[int] = mapped_column(_fk("auth.users.id"), unique=True)
     first_name: Mapped[str] = mapped_column(String(100))
     last_name: Mapped[str] = mapped_column(String(100))
+    doc_type: Mapped[str] = mapped_column(
+        String(20), default="cedula", server_default="cedula"
+    )
     cedula: Mapped[str | None] = mapped_column(String(20), unique=True, default=None)
     birth_date: Mapped[date | None] = mapped_column(Date, default=None)
     phone: Mapped[str | None] = mapped_column(String(20), default=None)

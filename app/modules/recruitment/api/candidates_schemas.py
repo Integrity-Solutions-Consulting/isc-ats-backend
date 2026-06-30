@@ -1,13 +1,18 @@
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.shared.validators import (
     is_adult,
+    is_valid_cedula_ec,
     is_valid_id_number,
+    is_valid_passport,
     is_valid_phone,
+    is_within_max_age,
 )
+
+DocType = Literal["cedula", "passport"]
 
 
 class _CandidateInputValidators(BaseModel):
@@ -27,15 +32,32 @@ class _CandidateInputValidators(BaseModel):
 
     @field_validator("cedula", check_fields=False)
     @classmethod
-    def _validate_cedula(cls, v: str | None) -> str | None:
+    def _clean_cedula(cls, v: str | None) -> str | None:
         if v is None:
             return v
         stripped = v.strip()
-        if not stripped:
-            return None
-        if not is_valid_id_number(stripped):
-            raise ValueError("Cédula o documento de identidad inválido")
-        return stripped
+        return stripped or None
+
+    @model_validator(mode="after")
+    def _validate_document(self) -> "_CandidateInputValidators":
+        """Validate the document number against its declared type. Cédula uses the
+        EC modulus-10 check; passport uses the alphanumeric rule. When the type is
+        unknown (a partial update that omits doc_type), fall back to the
+        length-based heuristic so existing flows are not broken."""
+        cedula = getattr(self, "cedula", None)
+        if not cedula:
+            return self
+        doc_type = getattr(self, "doc_type", None)
+        if doc_type == "passport":
+            valid = is_valid_passport(cedula)
+        elif doc_type == "cedula":
+            valid = is_valid_cedula_ec(cedula)
+        else:
+            valid = is_valid_id_number(cedula)
+        if not valid:
+            label = "Pasaporte" if doc_type == "passport" else "Cédula o documento de identidad"
+            raise ValueError(f"{label} inválido")
+        return self
 
     @field_validator("phone", check_fields=False)
     @classmethod
@@ -56,12 +78,15 @@ class _CandidateInputValidators(BaseModel):
             return v
         if not is_adult(v):
             raise ValueError("Debe ser mayor de 18 años")
+        if not is_within_max_age(v):
+            raise ValueError("La edad máxima permitida es de 65 años")
         return v
 
 
 class CandidateBase(BaseModel):
     first_name: str = Field(max_length=100)
     last_name: str = Field(max_length=100)
+    doc_type: DocType = "cedula"
     cedula: str | None = Field(default=None, max_length=20)
     birth_date: date | None = None
     phone: str | None = Field(default=None, max_length=20)
@@ -85,6 +110,7 @@ class CandidateCreate(CandidateBase, _CandidateInputValidators):
 class CandidateUpdate(_CandidateInputValidators):
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
+    doc_type: DocType | None = None
     cedula: str | None = Field(default=None, max_length=20)
     birth_date: date | None = None
     phone: str | None = Field(default=None, max_length=20)
@@ -138,6 +164,7 @@ class CandidateExpandedRead(BaseModel):
     email: str
     first_name: str
     last_name: str
+    doc_type: str
     cedula: str | None
     birth_date: date | None
     phone: str | None

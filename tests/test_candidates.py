@@ -83,12 +83,15 @@ async def test_create_candidate_rejects_second_for_same_user(
 
 async def test_create_candidate_rejects_duplicate_cedula(session: AsyncSession) -> None:
     service = _service(session)
+    # A unique alphanumeric document — declared as a passport so the random hex
+    # passes validation; the unique constraint on the column is what we exercise.
     cedula = uuid.uuid4().hex[:10]
     first = await _make_user(session)
     second = await _make_user(session)
     await service.create(
         CandidateCreate(
-            user_id=first.id, first_name="A", last_name="A", cedula=cedula
+            user_id=first.id, first_name="A", last_name="A",
+            doc_type="passport", cedula=cedula,
         ),
         ACTOR,
     )
@@ -96,7 +99,8 @@ async def test_create_candidate_rejects_duplicate_cedula(session: AsyncSession) 
     with pytest.raises(DuplicateCandidateError):
         await service.create(
             CandidateCreate(
-                user_id=second.id, first_name="B", last_name="B", cedula=cedula
+                user_id=second.id, first_name="B", last_name="B",
+                doc_type="passport", cedula=cedula,
             ),
             ACTOR,
         )
@@ -190,6 +194,7 @@ async def test_create_candidate_with_university_and_address(session: AsyncSessio
 
     # Fetch any university parameter seeded by the migration
     from sqlalchemy import select
+
     from app.modules.org.infrastructure.models import Parameter
 
     univ = (
@@ -229,6 +234,7 @@ async def test_candidates_expanded_includes_university_and_address(
     session: AsyncSession,
 ) -> None:
     from sqlalchemy import select
+
     from app.modules.org.infrastructure.models import Parameter
 
     univ = (

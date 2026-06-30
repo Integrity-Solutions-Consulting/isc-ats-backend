@@ -8,6 +8,7 @@ import re
 from datetime import date
 
 _CEDULA_RE = re.compile(r"^\d{10}$")
+_PASSPORT_RE = re.compile(r"^[A-Z0-9]{6,20}$", re.IGNORECASE)
 _PHONE_LOCAL_RE = re.compile(r"^09\d{8}$")
 _PHONE_INTL_RE = re.compile(r"^\+5939\d{8}$")
 _PHONE_E164_RE = re.compile(r"^\+\d{7,15}$")
@@ -40,10 +41,20 @@ def is_valid_cedula_ec(value: str) -> bool:
 
 def is_valid_id_number(value: str) -> bool:
     """A 10-digit value must be a valid cédula; otherwise accept it as a passport
-    (at least 5 characters). Mirrors the frontend idNumber rule."""
+    (at least 5 characters). Mirrors the frontend idNumber rule.
+
+    Used as the fallback when the document type is unknown (e.g. a partial update
+    that does not send doc_type). When the type IS known, validate with
+    is_valid_cedula_ec or is_valid_passport directly."""
     if re.fullmatch(r"\d{10}", value):
         return is_valid_cedula_ec(value)
     return len(value) >= 5
+
+
+def is_valid_passport(value: str) -> bool:
+    """Validate an international passport: 6–20 alphanumeric characters.
+    Mirrors the frontend validatePassport."""
+    return bool(_PASSPORT_RE.match(value))
 
 
 def is_valid_phone_ec(value: str) -> bool:
@@ -68,6 +79,18 @@ def is_adult(birth_date: date, min_years: int = 18) -> bool:
     except ValueError:  # Feb 29 on a non-leap cutoff year
         cutoff = today.replace(year=today.year - min_years, day=28)
     return birth_date <= cutoff
+
+
+def is_within_max_age(birth_date: date, max_years: int = 65) -> bool:
+    """True when `birth_date` is at most `max_years` years before today, i.e. the
+    person is no older than the maximum allowed age. Mirrors the frontend maxAge,
+    so a date the browser accepts is not rejected by the API."""
+    today = date.today()
+    try:
+        cutoff = today.replace(year=today.year - max_years)
+    except ValueError:  # Feb 29 on a non-leap cutoff year
+        cutoff = today.replace(year=today.year - max_years, day=28)
+    return birth_date >= cutoff
 
 
 PASSWORD_MIN_LENGTH = 8

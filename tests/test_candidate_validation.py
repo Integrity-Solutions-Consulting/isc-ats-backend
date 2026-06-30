@@ -18,8 +18,10 @@ from app.shared.validators import (
     is_adult,
     is_valid_cedula_ec,
     is_valid_id_number,
+    is_valid_passport,
     is_valid_phone,
     is_valid_phone_ec,
+    is_within_max_age,
 )
 
 VALID_CEDULA = "1712345675"  # province 17, valid check digit
@@ -68,6 +70,15 @@ def test_id_number_rejects_short_passport():
     assert is_valid_id_number("AB12") is False
 
 
+def test_is_valid_passport():
+    assert is_valid_passport("AB123456") is True
+    assert is_valid_passport("1234567890") is True   # 10 digits is a valid passport
+    assert is_valid_passport("ab123456") is True     # case-insensitive
+    assert is_valid_passport("AB12") is False         # too short (< 6)
+    assert is_valid_passport("A" * 21) is False       # too long (> 20)
+    assert is_valid_passport("AB-12345") is False     # non-alphanumeric
+
+
 def test_phone_local_and_intl():
     assert is_valid_phone_ec("0991234567") is True
     assert is_valid_phone_ec("+593991234567") is True
@@ -93,6 +104,12 @@ def test_is_adult():
     assert is_adult(minor) is False
 
 
+def test_is_within_max_age():
+    assert is_within_max_age(date(2000, 1, 1)) is True
+    senior = date.today().replace(year=date.today().year - 70)
+    assert is_within_max_age(senior) is False
+
+
 # --- CandidateCreate -------------------------------------------------------
 
 
@@ -108,7 +125,41 @@ def test_create_rejects_invalid_cedula():
 
 
 def test_create_accepts_passport():
-    assert _create(cedula="AB123456").cedula == "AB123456"
+    # With the explicit doc_type contract, a passport must declare doc_type.
+    assert _create(doc_type="passport", cedula="AB123456").cedula == "AB123456"
+
+
+def test_doc_type_defaults_to_cedula():
+    assert _create().doc_type == "cedula"
+
+
+def test_create_passport_accepts_ten_digit_number():
+    # A 10-digit passport that is NOT a valid cédula must pass when doc_type=passport.
+    c = _create(doc_type="passport", cedula="1234567890")
+    assert c.cedula == "1234567890"
+    assert c.doc_type == "passport"
+
+
+def test_create_cedula_rejects_non_cedula_number():
+    # The same number, declared as a cédula, must fail the modulus-10 check.
+    with pytest.raises(ValidationError):
+        _create(doc_type="cedula", cedula="1234567890")
+
+
+def test_create_passport_rejects_too_short():
+    with pytest.raises(ValidationError):
+        _create(doc_type="passport", cedula="AB12")
+
+
+def test_update_passport_accepts_ten_digit_number():
+    u = CandidateUpdate(doc_type="passport", cedula="1234567890")
+    assert u.cedula == "1234567890"
+
+
+def test_update_without_doc_type_falls_back_to_heuristic():
+    # A partial update that does not touch the document type keeps the old
+    # length-based heuristic, so existing flows are not broken.
+    assert CandidateUpdate(cedula="AB123456").cedula == "AB123456"
 
 
 def test_create_accepts_none_cedula():
@@ -138,6 +189,17 @@ def test_create_rejects_minor():
 def test_create_rejects_future_birth_date():
     with pytest.raises(ValidationError):
         _create(birth_date=date.today() + timedelta(days=365))
+
+
+def test_create_rejects_over_max_age():
+    senior = date.today().replace(year=date.today().year - 70)
+    with pytest.raises(ValidationError):
+        _create(birth_date=senior)
+
+
+def test_create_accepts_exactly_max_age():
+    at_limit = date.today().replace(year=date.today().year - 65)
+    assert _create(birth_date=at_limit).birth_date == at_limit
 
 
 def test_create_rejects_blank_first_name():

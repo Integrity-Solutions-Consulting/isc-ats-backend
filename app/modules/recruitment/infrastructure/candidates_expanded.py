@@ -20,6 +20,7 @@ class CandidateExpanded:
     email: str
     first_name: str
     last_name: str
+    doc_type: str
     cedula: str | None
     birth_date: date | None
     phone: str | None
@@ -58,6 +59,7 @@ class CandidatesExpandedRepository:
                 User.email,
                 Candidate.first_name,
                 Candidate.last_name,
+                Candidate.doc_type,
                 Candidate.cedula,
                 Candidate.birth_date,
                 Candidate.phone,
