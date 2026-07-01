@@ -80,6 +80,31 @@ async def test_login_resolves_portal_by_code(session: AsyncSession) -> None:
     assert claims["type"] == "access"
 
 
+async def test_login_is_case_insensitive_for_email(session: AsyncSession) -> None:
+    """A stored lowercase email must authenticate even when the client sends it
+    capitalized. Mobile keyboards and some browsers auto-capitalize the first
+    letter of the email field, which was silently causing a 401 on the correct
+    password."""
+    await _make_staff_user(session, email="mixedcase@integrity.com.ec")
+
+    tokens = await _service(session).login(
+        "MixedCase@Integrity.com.ec", "secret123", "127.0.0.1"
+    )
+
+    assert tokens.access_token and tokens.refresh_token
+
+
+async def test_login_ignores_surrounding_whitespace_in_email(session: AsyncSession) -> None:
+    """A trailing space introduced by copy-paste or autofill must not block login."""
+    await _make_staff_user(session, email="spaced@integrity.com.ec")
+
+    tokens = await _service(session).login(
+        "  spaced@integrity.com.ec  ", "secret123", "127.0.0.1"
+    )
+
+    assert tokens.access_token
+
+
 async def test_login_wrong_password_rejected(session: AsyncSession) -> None:
     await _make_staff_user(session)
     with pytest.raises(InvalidCredentialsError):

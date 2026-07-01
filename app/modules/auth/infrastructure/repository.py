@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.infrastructure.models import RefreshToken, User
@@ -12,9 +12,14 @@ class UserRepository(BaseRepository[User]):
         super().__init__(session, User)
 
     async def get_by_email(self, email: str) -> User | None:
+        # Email lookup is case-insensitive and whitespace-tolerant: mobile keyboards
+        # and browser autofill routinely capitalize the first letter or append a
+        # trailing space, which would otherwise miss a lowercase-stored address and
+        # surface as a wrong-credentials 401 on the correct password.
+        normalized = email.strip().lower()
         stmt = (
             select(User)
-            .where(User.email == email)
+            .where(func.lower(User.email) == normalized)
             .where(User.is_active.is_(True))
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
