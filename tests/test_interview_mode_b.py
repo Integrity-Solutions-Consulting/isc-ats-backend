@@ -345,6 +345,106 @@ async def test_list_offers_excludes_other_candidates(session: AsyncSession) -> N
     assert offers == []
 
 
+async def test_get_offer_rejects_cancelled_status(session: AsyncSession) -> None:
+    """Bug 4: an HR-cancelled offer (status != offered) is no longer confirmable."""
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    invite = await _svc(session).create_invite(_slots_payload(app_, stage, interviewer), ACTOR)
+    cancelled = await ParameterRepository(session).get_by_type_and_code(
+        "interview_status", "cancelled"
+    )
+    assert cancelled is not None
+    invite.status_id = cancelled.id
+    await session.flush()
+    with pytest.raises(InterviewOfferClosedError):
+        await _svc(session).get_offer_for_candidate(invite.id, cand_user.id)
+
+
+async def test_confirm_rejects_cancelled_offer(session: AsyncSession) -> None:
+    """Bug 4: a candidate cannot confirm a slot on a cancelled interview."""
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    invite = await _svc(session).create_invite(_slots_payload(app_, stage, interviewer), ACTOR)
+    cancelled = await ParameterRepository(session).get_by_type_and_code(
+        "interview_status", "cancelled"
+    )
+    invite.status_id = cancelled.id
+    await session.flush()
+    with pytest.raises(InterviewOfferClosedError):
+        await _svc(session).confirm_slot_for_candidate(
+            invite.id, cand_user.id, invite.offered_slots[0]
+        )
+
+
+async def test_list_offers_excludes_expired(session: AsyncSession) -> None:
+    """Bug 8: an offer past its token_expires_at must not surface as open."""
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    invite = await _svc(session).create_invite(_slots_payload(app_, stage, interviewer), ACTOR)
+    invite.token_expires_at = _now() - timedelta(hours=1)
+    await session.flush()
+    offers = await _svc(session).list_offers_for_candidate(cand_user.id)
+    assert all(o.id != invite.id for o in offers)
+
+
+async def test_double_booking_ignores_cancelled(session: AsyncSession) -> None:
+    """Bug 6: a cancelled interview must NOT block a new booking on the same slot."""
+    app_, stage, interviewer, cand_user, param = await _make_graph(session)
+    invite = await _svc(session).create_invite(_slots_payload(app_, stage, interviewer), ACTOR)
+    chosen = invite.offered_slots[0]
+    start = datetime.fromisoformat(chosen["start"])
+    end = datetime.fromisoformat(chosen["end"])
+    cancelled = await ParameterRepository(session).get_by_type_and_code(
+        "interview_status", "cancelled"
+    )
+    # A CANCELLED interview overlapping the slot must not block confirmation.
+    await _svc(session).create(
+        InterviewCreate(
+            application_id=app_.id,
+            process_stage_id=stage.id,
+            interviewer_id=interviewer.id,
+            scheduled_at=start,
+            ends_at=end,
+            status_id=cancelled.id,
+            scheduled_by_id=param.id,
+        ),
+        ACTOR,
+    )
+    confirmed = await _svc(session).confirm_slot_for_candidate(
+        invite.id, cand_user.id, chosen
+    )
+    assert confirmed.scheduled_at is not None
+
+
+async def test_confirm_rejects_naive_slot(session: AsyncSession) -> None:
+    """Bug 10: a chosen_slot without a timezone offset is rejected."""
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    invite = await _svc(session).create_invite(_slots_payload(app_, stage, interviewer), ACTOR)
+    naive = {"start": "2999-01-01T10:00:00", "end": "2999-01-01T11:00:00"}
+    with pytest.raises(InterviewValidationError):
+        await _svc(session).confirm_slot_for_candidate(invite.id, cand_user.id, naive)
+
+
+async def test_confirm_rejects_past_slot(session: AsyncSession) -> None:
+    """Bug 10: a chosen_slot starting in the past is rejected."""
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    base = _now() - timedelta(days=1)
+    past_slot = {
+        "start": base.isoformat(),
+        "end": (base + timedelta(hours=1)).isoformat(),
+    }
+    invite = await _svc(session).create_invite(
+        InterviewInviteCreate(
+            application_id=app_.id,
+            process_stage_id=stage.id,
+            interviewer_id=interviewer.id,
+            offered_slots=[past_slot],
+        ),
+        ACTOR,
+    )
+    with pytest.raises(InterviewValidationError):
+        await _svc(session).confirm_slot_for_candidate(
+            invite.id, cand_user.id, past_slot
+        )
+
+
 # ── list_scheduled_for_candidate ──────────────────────────────────────────────
 
 

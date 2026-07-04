@@ -109,12 +109,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_default_jwt_secret_in_production(self) -> "Settings":
-        """Refuse to boot in production with the well-known default JWT secret.
+        """Refuse to boot outside dev/test with the well-known default JWT secret.
 
         Anyone who knows the default value can forge valid tokens, so we fail loudly
-        rather than silently accepting an insecure configuration.
+        rather than silently accepting an insecure configuration. Covers staging,
+        pre-prod, and production — not just environment="production".
         """
-        if self.is_production and self.jwt_secret_key == _DEFAULT_JWT_SECRET:
+        if not self._is_local_dev and self.jwt_secret_key == _DEFAULT_JWT_SECRET:
             raise ValueError(
                 "jwt_secret_key must be changed from the default value before "
                 "running in production. Set the JWT_SECRET_KEY environment "
@@ -124,12 +125,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _reject_default_minio_credentials_in_production(self) -> "Settings":
-        """Refuse to boot in production with the well-known MinIO default creds.
+        """Refuse to boot outside dev/test with the well-known MinIO default creds.
 
         `minioadmin/minioadmin` is public knowledge, so shipping it would expose
         the object store. Fail loudly instead of silently accepting it.
         """
-        if self.is_production and (
+        if not self._is_local_dev and (
             self.minio_access_key == _DEFAULT_MINIO_CREDENTIAL
             or self.minio_secret_key == _DEFAULT_MINIO_CREDENTIAL
         ):
@@ -139,6 +140,11 @@ class Settings(BaseSettings):
                 "MINIO_SECRET_KEY environment variables."
             )
         return self
+
+    @property
+    def _is_local_dev(self) -> bool:
+        """True for development and test; False for staging, production, etc."""
+        return self.environment.lower() in ("development", "test", "testing")
 
     @property
     def is_production(self) -> bool:

@@ -22,7 +22,7 @@ from app.modules.auth.infrastructure.models import (
 from app.modules.auth.permissions_catalog import PERMISSION_CATALOG
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 
-ADMIN_ROLE_NAME = "admin"
+ADMIN_ROLE_NAME = "Administrador"
 ADMIN_PORTAL_CODE = "staff"
 
 CANDIDATE_ROLE_NAME = "candidate"
@@ -200,6 +200,14 @@ async def bootstrap_admin(
     # Candidate role — idempotent; must exist before any candidate registers.
     candidate_role = await ensure_candidate_role(session)
     await grant_candidate_permissions_to_role(session, candidate_role.id)
+
+    # Ensure other standard roles exist
+    for rname in ["Talento Humano", "Comercial", "Proyecto"]:
+        stmt = select(Role).where(Role.name == rname).where(Role.is_active.is_(True))
+        existing_role = (await session.execute(stmt)).scalar_one_or_none()
+        if existing_role is None:
+            session.add(Role(name=rname, description=f"Rol de {rname}"))
+    await session.flush()
 
     return BootstrapResult(
         permissions_synced=permissions,

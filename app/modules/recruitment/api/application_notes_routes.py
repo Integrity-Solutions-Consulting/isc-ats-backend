@@ -46,7 +46,7 @@ async def list_notes(
 ) -> Page[ApplicationNoteRead]:
     params = PageParams(page=page, size=size)
     items, total = await service.list(params, application_id=application_id)
-    enriched = [await service._enrich_author(i) for i in items]
+    enriched = await service.enrich_authors(items)
     return Page.create(enriched, total, params)
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.core.dependencies import CurrentUser
 from app.modules.auth.infrastructure.models import User
@@ -118,6 +118,11 @@ class InterviewService:
         ends = changes.get("ends_at", interview.ends_at)
         if scheduled is not None and ends is not None and ends <= scheduled:
             raise InterviewValidationError("ends_at must be after scheduled_at")
+        interviewer_id = changes.get("interviewer_id", interview.interviewer_id)
+        if ("scheduled_at" in changes or "ends_at" in changes or "interviewer_id" in changes) and scheduled is not None and ends is not None:
+            await self._assert_no_double_booking(
+                interviewer_id, scheduled, ends, exclude_id=interview_id
+            )
         await self._validate_refs(changes)
         changes["updated_by"] = actor.user_id
         changes["ip_updated"] = actor.ip
@@ -202,6 +207,7 @@ class InterviewService:
         )
         if offered is None:
             return []
+        now_utc = datetime.now(UTC)
         stmt = (
             select(Interview)
             .join(Application, Application.id == Interview.application_id)
@@ -210,6 +216,14 @@ class InterviewService:
             .where(Interview.status_id == offered.id)
             .where(Interview.scheduled_at.is_(None))
             .where(Interview.is_active.is_(True))
+            # Expired offers (token_expires_at in the past) are no longer
+            # confirmable, so they must not surface as open offers.
+            .where(
+                or_(
+                    Interview.token_expires_at.is_(None),
+                    Interview.token_expires_at >= now_utc,
+                )
+            )
             .order_by(Interview.id)
         )
         return list((await session.execute(stmt)).scalars().all())
@@ -254,6 +268,18 @@ class InterviewService:
         if owner_id is None or owner_id != user_id:
             raise InterviewNotFoundError(f"Interview {interview_id} not found")
 
+        # The offer must still be in status=offered. Otherwise an HR-cancelled
+        # (or otherwise transitioned) interview would still be treated as an open
+        # offer the candidate could confirm — scheduled_at being None is not
+        # sufficient to prove the offer is live.
+        offered = await ParameterRepository(
+            self.repository.session
+        ).get_by_type_and_code("interview_status", "offered")
+        if offered is None or interview.status_id != offered.id:
+            raise InterviewOfferClosedError(
+                "This interview offer is no longer open"
+            )
+
         if interview.scheduled_at is not None:
             raise InterviewOfferClosedError(
                 "This interview offer was already confirmed"
@@ -279,12 +305,6 @@ class InterviewService:
         """
         interview = await self.get_offer_for_candidate(interview_id, user_id)
 
-        offered = interview.offered_slots or []
-        if chosen_slot not in offered:
-            raise InterviewValidationError(
-                "chosen_slot must match one of the offered_slots exactly"
-            )
-
         try:
             start = datetime.fromisoformat(str(chosen_slot["start"]))
             end = datetime.fromisoformat(str(chosen_slot["end"]))
@@ -293,10 +313,41 @@ class InterviewService:
                 "chosen_slot must have valid 'start' and 'end' ISO-8601 datetimes"
             ) from exc
 
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=UTC)
-        if end.tzinfo is None:
-            end = end.replace(tzinfo=UTC)
+        # The candidate-supplied slot must carry an explicit timezone offset — a
+        # naive datetime is ambiguous and would let a client's local time be
+        # silently reinterpreted as UTC.
+        if start.tzinfo is None or end.tzinfo is None:
+            raise InterviewValidationError(
+                "chosen_slot 'start' and 'end' must be timezone-aware ISO-8601 datetimes"
+            )
+
+        # Reject slots that start in the past — a confirmed interview must be in
+        # the future.
+        if start < datetime.now(UTC):
+            raise InterviewValidationError(
+                "chosen_slot 'start' must be in the future"
+            )
+
+        offered = interview.offered_slots or []
+        matched = False
+        for slot in offered:
+            try:
+                s_start = datetime.fromisoformat(str(slot.get("start")))
+                s_end = datetime.fromisoformat(str(slot.get("end")))
+            except (KeyError, ValueError, TypeError):
+                continue
+            if s_start.tzinfo is None:
+                s_start = s_start.replace(tzinfo=UTC)
+            if s_end.tzinfo is None:
+                s_end = s_end.replace(tzinfo=UTC)
+            if s_start == start and s_end == end:
+                matched = True
+                break
+
+        if not matched:
+            raise InterviewValidationError(
+                "chosen_slot must match one of the offered_slots"
+            )
 
         await self._assert_no_double_booking(
             interview.interviewer_id, start, end, exclude_id=interview.id
@@ -368,6 +419,12 @@ class InterviewService:
         Overlap condition: existing.scheduled_at < end AND existing.ends_at > start
         """
         session = self.repository.session
+        # A cancelled interview must NOT block a slot even though its row is still
+        # active (not soft-deleted) — mirrors AvailableSlotsService.get_slots.
+        cancelled_param = await ParameterRepository(session).get_by_type_and_code(
+            "interview_status", "cancelled"
+        )
+        cancelled_id = cancelled_param.id if cancelled_param is not None else None
         stmt = (
             select(Interview)
             .where(Interview.interviewer_id == interviewer_id)
@@ -376,6 +433,8 @@ class InterviewService:
             .where(Interview.scheduled_at < end)
             .where(Interview.ends_at > start)
         )
+        if cancelled_id is not None:
+            stmt = stmt.where(Interview.status_id != cancelled_id)
         if exclude_id is not None:
             stmt = stmt.where(Interview.id != exclude_id)
 

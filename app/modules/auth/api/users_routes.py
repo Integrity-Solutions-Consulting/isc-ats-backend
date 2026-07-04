@@ -3,15 +3,19 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from sqlalchemy import func, select
 
+from app.core.config import settings
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.core.security import hash_password
 from app.modules.auth.api.authorization import require_permission
 from app.modules.auth.infrastructure.models import Role, User, UserRole
-from app.modules.auth.infrastructure.repository import UserRepository
+from app.modules.auth.infrastructure.repository import (
+    RefreshTokenRepository,
+    UserRepository,
+)
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.shared.pagination import Page, PageParams
 
@@ -35,9 +39,21 @@ class UserStatusUpdate(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=6, max_length=72)
+    password: str | None = Field(default=None, max_length=72)
     role_id: int
     is_active: bool = True
+
+    @field_validator("password")
+    @classmethod
+    def _enforce_password_policy(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from app.shared.validators import password_policy_error
+
+        error = password_policy_error(value)
+        if error:
+            raise ValueError(error)
+        return value
 
 
 router = APIRouter(prefix="/users", tags=["auth · users"])
@@ -111,6 +127,15 @@ async def create_user(
     The admin provides the initial password directly (no email infrastructure).
     The user can log in immediately with the given credentials.
     """
+    # Password is required here: UserCreate.password is Optional (the field is
+    # reused by flows that mint passwordless accounts), but this route hashes it
+    # unconditionally, so a missing password would 500. Reject it up front.
+    if data.password is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="password is required",
+        )
+
     # Ensure the target role exists and is active.
     role = (
         await session.execute(
@@ -123,9 +148,14 @@ async def create_user(
             detail=f"Role {data.role_id} not found or inactive",
         )
 
-    # Check email uniqueness.
+    # Check email uniqueness. Case-insensitive and whitespace-tolerant so
+    # "Foo@x.com" cannot slip past a lowercase-stored "foo@x.com" (mirrors
+    # UserRepository.get_by_email normalization).
+    normalized_email = data.email.strip().lower()
     existing = (
-        await session.execute(select(User).where(User.email == data.email))
+        await session.execute(
+            select(User).where(func.lower(User.email) == normalized_email)
+        )
     ).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(
@@ -174,6 +204,7 @@ async def update_user_status(
     data: UserStatusUpdate,
     session: SessionDep,
     current_user: CurrentUserDep,
+    request: Request,
 ) -> UserRead:
     # Self-deactivation guard
     if not data.is_active and user_id == current_user.user_id:
@@ -195,6 +226,17 @@ async def update_user_status(
         "ip_updated": current_user.ip,
     }
     user = await repo.update(user, changes)
+
+    # Deactivation must end all live sessions, not just flip the flag — otherwise
+    # a deactivated user keeps working until their tokens self-expire. Mirror
+    # AuthService.deactivate_user / change_password: revoke every refresh token
+    # and mark all access tokens issued before now as revoked.
+    if not data.is_active:
+        await RefreshTokenRepository(session).revoke_all_by_user_id(user_id)
+        token_denylist = request.app.state.token_denylist
+        if token_denylist is not None:
+            ttl = settings.access_token_expire_minutes * 60 + 60  # + clock-skew buffer
+            await token_denylist.revoke_user(user_id, ttl)
 
     roles_map = await _fetch_roles_by_user_ids(session, [user.id])
     ur = UserRead.model_validate(user)

@@ -60,3 +60,50 @@ async def test_new_and_existing_email_are_indistinguishable(
     # And the message never confirms the email exists.
     assert "ya está registrado" not in second.text
     assert "registrad" in second.json()["message"].lower()
+
+
+async def test_reregister_inactive_email_is_indistinguishable(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """An email held by an INACTIVE account still blocks registration.
+
+    register_candidate must look up the email including inactive rows; otherwise
+    a re-registration would try to insert a duplicate and either 500 on the DB
+    unique index or leak that the (deactivated) account exists. The response must
+    stay generic and never create a second row.
+    """
+    from sqlalchemy import func, select
+
+    from app.core.security import hash_password
+    from app.modules.auth.infrastructure.models import User
+    from app.modules.org.infrastructure.parameters_repository import ParameterRepository
+
+    portal = await ParameterRepository(session).get_by_type_and_code(
+        "user_portal", "candidate"
+    )
+    assert portal is not None
+    email = f"inactive-{uuid.uuid4().hex[:12]}@test.example.com"
+    session.add(
+        User(
+            email=email,
+            password_hash=hash_password(_PASSWORD),
+            portal_id=portal.id,
+            email_verified=True,
+            is_active=False,
+        )
+    )
+    await session.flush()
+
+    response = await client.post(
+        "/api/v1/auth/register", json={"email": email, "password": _PASSWORD}
+    )
+
+    # Generic success response, and NO second user row for this email.
+    assert response.status_code == 201
+    assert "ya está registrado" not in response.text
+    count = (
+        await session.execute(
+            select(func.count()).select_from(User).where(func.lower(User.email) == email.lower())
+        )
+    ).scalar_one()
+    assert count == 1

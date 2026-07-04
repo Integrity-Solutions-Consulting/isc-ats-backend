@@ -59,7 +59,7 @@ async def test_bootstrap_is_idempotent(session: AsyncSession) -> None:
 
 
 def test_admin_role_name_is_stable() -> None:
-    assert ADMIN_ROLE_NAME == "admin"
+    assert ADMIN_ROLE_NAME == "Administrador"
 
 
 def test_candidate_role_name_is_stable() -> None:

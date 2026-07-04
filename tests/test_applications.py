@@ -18,7 +18,10 @@ from app.modules.recruitment.api.application_documents_schemas import (
     ApplicationDocumentCreate,
 )
 from app.modules.recruitment.api.application_notes_schemas import ApplicationNoteCreate
-from app.modules.recruitment.api.applications_schemas import ApplicationCreate
+from app.modules.recruitment.api.applications_schemas import (
+    ApplicationCreate,
+    ApplicationUpdate,
+)
 from app.modules.recruitment.application.application_documents_service import (
     ApplicationDocumentReferenceError,
     ApplicationDocumentService,
@@ -177,6 +180,110 @@ async def test_document_and_note_validate_application(session: AsyncSession) -> 
         await notes.create(
             ApplicationNoteCreate(application_id=999999, content="x"), ACTOR
         )
+
+
+async def _make_stage(
+    session: AsyncSession, process_id: int, param: Parameter, order: int
+) -> ProcessStage:
+    return await BaseRepository(session, ProcessStage).add(
+        ProcessStage(
+            process_id=process_id, stage_id=param.id, order=order, created_by=1
+        )
+    )
+
+
+async def test_update_rejects_stage_from_other_process(session: AsyncSession) -> None:
+    """Bug 2: current_stage_id must belong to the vacancy's own process."""
+    vacancy, candidate, param = await _build_graph(session)
+    service = _service(session)
+    application = await service.create(_payload(vacancy, candidate, param), ACTOR)
+
+    # A stage belonging to a DIFFERENT, unrelated process.
+    other_process = await BaseRepository(session, Process).add(
+        Process(
+            client_company_id=vacancy.client_company_id,
+            department_id=vacancy.department_id,
+            name=f"Other{uuid.uuid4().hex[:6]}",
+            created_by=1,
+        )
+    )
+    foreign_stage = await _make_stage(session, other_process.id, param, order=1)
+
+    with pytest.raises(ApplicationReferenceError):
+        await service.update(
+            application.id,
+            ApplicationUpdate(current_stage_id=foreign_stage.id),
+            ACTOR,
+        )
+
+
+async def test_update_accepts_stage_from_own_process(session: AsyncSession) -> None:
+    """Bug 2: a stage from the vacancy's own process is accepted."""
+    vacancy, candidate, param = await _build_graph(session)
+    own_stage = await _make_stage(session, vacancy.process_id, param, order=1)
+    service = _service(session)
+    application = await service.create(_payload(vacancy, candidate, param), ACTOR)
+
+    updated = await service.update(
+        application.id, ApplicationUpdate(current_stage_id=own_stage.id), ACTOR
+    )
+    assert updated.current_stage_id == own_stage.id
+
+
+async def test_resurrection_clears_stale_fields(session: AsyncSession) -> None:
+    """Bug 5: resurrecting a withdrawn application clears rejected_at_stage_id,
+    match_score, match_summary, and current_status_id."""
+    from decimal import Decimal
+
+    vacancy, candidate, param = await _build_graph(session)
+    service = _service(session)
+    first = await service.create(_payload(vacancy, candidate, param), ACTOR)
+
+    # Simulate a prior lifecycle leaving stale terminal/AI data on the row.
+    first.rejected_at_stage_id = None  # keep FK-safe; set score/summary directly
+    first.match_score = Decimal("88.50")
+    first.match_summary = "great fit"
+    first.current_status_id = param.id
+    await session.flush()
+    await service.delete(first.id)
+
+    again = await service.create(_payload(vacancy, candidate, param), ACTOR)
+    assert again.id == first.id
+    assert again.match_score is None
+    assert again.match_summary is None
+    assert again.current_status_id is None
+    assert again.rejected_at_stage_id is None
+
+
+async def test_enrich_authors_batches_users(session: AsyncSession) -> None:
+    """Bug 9: enrich_authors resolves author names for a batch of notes."""
+    vacancy, candidate, param = await _build_graph(session)
+    application = await _service(session).create(_payload(vacancy, candidate, param), ACTOR)
+
+    portal = await ParameterRepository(session).get_by_type_and_code("user_portal", "staff")
+    author = await BaseRepository(session, User).add(
+        User(email="jane.doe@example.com", portal_id=portal.id)
+    )
+    author_actor = CurrentUser(user_id=author.id, ip="127.0.0.1")
+
+    notes_service = ApplicationNoteService(
+        BaseRepository(session, ApplicationNote),
+        BaseRepository(session, Application),
+        users=BaseRepository(session, User),
+    )
+    await notes_service.create(
+        ApplicationNoteCreate(application_id=application.id, content="one"), author_actor
+    )
+    await notes_service.create(
+        ApplicationNoteCreate(application_id=application.id, content="two"), author_actor
+    )
+
+    items, _ = await notes_service.list(
+        PageParams(page=1, size=20), application_id=application.id
+    )
+    enriched = await notes_service.enrich_authors(items)
+    assert len(enriched) == 2
+    assert all(e.author_name == "Jane Doe" for e in enriched)
 
 
 def test_author_name_derivation_from_email() -> None:

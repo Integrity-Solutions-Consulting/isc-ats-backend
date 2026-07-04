@@ -96,7 +96,7 @@ class VacancyService:
     async def get(self, vacancy_id: int) -> Vacancy:
         vacancy = await self.repository.get(vacancy_id, include_inactive=True)
         if vacancy is None:
-            raise VacancyNotFoundError(f"Vacancy {vacancy_id} not found")
+            raise VacancyNotFoundError(f"La vacante con ID {vacancy_id} no fue encontrada.")
         return vacancy
 
     async def create(self, data: VacancyCreate, actor: CurrentUser) -> Vacancy:
@@ -169,6 +169,22 @@ class VacancyService:
     async def _assert(
         self, repo: BaseRepository[Any], values: dict[str, Any], field: str
     ) -> None:
+        FIELD_LABELS_ES = {
+            "vacancy_name_id": "El cargo",
+            "career_id": "La carrera",
+            "city_id": "La ciudad",
+            "work_mode_id": "La modalidad de trabajo",
+            "resource_level_id": "El nivel de experiencia",
+            "status_id": "El estado de la vacante",
+            "client_company_id": "El cliente / empresa",
+            "contact_id": "El contacto",
+            "department_id": "El departamento",
+            "process_id": "El proceso de selección",
+            "profile_template_id": "La plantilla de perfil",
+        }
         entity_id = values.get(field)
         if entity_id is not None and await repo.get(entity_id) is None:
-            raise VacancyReferenceError(f"{field}={entity_id} not found")
+            friendly_name = FIELD_LABELS_ES.get(field, field)
+            raise VacancyReferenceError(
+                f"{friendly_name} (ID: {entity_id}) seleccionado no es válido o no existe en el catálogo."
+            )

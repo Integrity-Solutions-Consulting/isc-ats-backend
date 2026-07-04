@@ -97,6 +97,14 @@ class ApplicationService:
             changes = data.model_dump()
             changes["is_active"] = True
             changes["current_stage_id"] = first_stage_id
+            # Resurrecting a withdrawn application must start clean: clear the
+            # rejection stage marker and the AI-computed match fields left over
+            # from the previous lifecycle, and reset the sub-status to the initial
+            # (none) state so the row does not carry stale terminal data.
+            changes["rejected_at_stage_id"] = None
+            changes["match_score"] = None
+            changes["match_summary"] = None
+            changes["current_status_id"] = None
             changes["updated_by"] = actor.user_id
             changes["ip_updated"] = actor.ip
             return await self.repository.update(existing, changes)
@@ -110,15 +118,28 @@ class ApplicationService:
         )
         return await self.repository.add(application)
 
+    async def _assert_stage_in_process(self, vacancy_id: int, stage_id: int) -> None:
+        """Reject a current_stage_id that does not belong to the vacancy's process."""
+        vacancy = await self.vacancies.get(vacancy_id)
+        if vacancy is None:
+            raise ApplicationReferenceError(f"vacancy_id={vacancy_id} not found")
+        stage = await self.process_stages.get(stage_id)
+        if stage is None or stage.process_id != vacancy.process_id:
+            raise ApplicationReferenceError(
+                f"current_stage_id={stage_id} does not belong to the vacancy's process"
+            )
+
     async def _first_stage_id(self, process_id: int) -> int | None:
-        from app.shared.pagination import PageParams
-        stages, _ = await self.process_stages.list(
-            PageParams(page=1, size=50),
-            filters={"process_id": process_id},
+        from sqlalchemy import select
+        stmt = (
+            select(ProcessStage.id)
+            .where(ProcessStage.process_id == process_id)
+            .where(ProcessStage.is_active.is_(True))
+            .order_by(ProcessStage.order)
+            .limit(1)
         )
-        if not stages:
-            return None
-        return min(stages, key=lambda s: s.order).id
+        session = self.process_stages.session
+        return (await session.execute(stmt)).scalar_one_or_none()
 
     async def update(
         self, application_id: int, data: ApplicationUpdate, actor: CurrentUser
@@ -126,6 +147,15 @@ class ApplicationService:
         application = await self.get(application_id)
         changes = data.model_dump(exclude_unset=True)
         await self._validate_optional(changes)
+
+        # A stage may only be set to one that belongs to THIS application's
+        # vacancy process — otherwise the Kanban column would jump to a stage
+        # from an unrelated process. Existence alone (checked in
+        # _validate_optional) is not enough.
+        if changes.get("current_stage_id") is not None:
+            await self._assert_stage_in_process(
+                application.vacancy_id, changes["current_stage_id"]
+            )
 
         # ── Terminal-transition matrix ────────────────────────────────────────
         # Resolve the three application_status param ids (cached lazily per call).

@@ -10,6 +10,9 @@ Two defenses, both applied BEFORE the bytes reach object storage:
    content smuggling, e.g. an executable renamed to `cv.pdf`.
 """
 
+import io
+import zipfile
+
 # 10 MiB — comfortably above a real CV/avatar/promo image, well below a DoS payload.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
@@ -50,9 +53,19 @@ def detect_mime(data: bytes) -> str | None:
         return "image/jpeg"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
-    # OOXML (.docx) and other Office files share the ZIP local-file-header magic.
+    # OOXML (.docx) and other Office files share the ZIP local-file-header magic,
+    # so ZIP magic alone is not enough — a generic .zip (or a renamed archive)
+    # would be mislabeled as .docx. Only classify as DOCX when the archive
+    # actually contains the OOXML wordprocessing structure.
     if data.startswith(b"PK\x03\x04"):
-        return _DOCX_MIME
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                names = set(zf.namelist())
+        except zipfile.BadZipFile:
+            return None
+        if "[Content_Types].xml" in names and "word/document.xml" in names:
+            return _DOCX_MIME
+        return None
     return None
 
 

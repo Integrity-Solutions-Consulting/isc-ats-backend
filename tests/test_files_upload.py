@@ -134,3 +134,21 @@ async def test_upload_rejects_oversized_payload(
         data={"entity_type": "cv"},
     )
     assert res.status_code == 413
+
+
+async def test_upload_rejects_candidate_for_staff_entity_type(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    # Candidates may only upload their own CVs and avatars; staff-only types
+    # (vacancy_image, word_doc) are rejected for candidate-portal tokens.
+    user = await _make_user(session)
+    candidate_token = create_access_token(user.id, extra_claims={"portal": "candidate"})
+    
+    res = await client.post(
+        "/api/v1/storage/files/upload",
+        headers={"Authorization": f"Bearer {candidate_token}"},
+        files=_pdf_upload(),
+        data={"entity_type": "vacancy_image"},
+    )
+    assert res.status_code == 403
+    assert "restricted" in res.json()["detail"].lower()

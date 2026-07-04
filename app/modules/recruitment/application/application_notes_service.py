@@ -1,3 +1,5 @@
+from sqlalchemy import select
+
 from app.core.dependencies import CurrentUser
 from app.modules.auth.infrastructure.models import User
 from app.modules.recruitment.api.application_notes_schemas import (
@@ -45,6 +47,33 @@ class ApplicationNoteService:
         read = ApplicationNoteRead.model_validate(note)
         read.author_name = author_name
         return read
+
+    async def enrich_authors(
+        self, notes: list[ApplicationNote]
+    ) -> list[ApplicationNoteRead]:
+        """Enrich a batch of notes with author names using ONE user query.
+
+        Avoids the N+1 that per-note _enrich_author would incur: collect the
+        distinct author ids and resolve them all at once.
+        """
+        author_ids = {
+            note.created_by for note in notes if note.created_by is not None
+        }
+        emails_by_id: dict[int, str] = {}
+        if author_ids and self.users is not None:
+            stmt = select(User).where(User.id.in_(author_ids))
+            users = (await self.users.session.execute(stmt)).scalars().all()
+            emails_by_id = {user.id: user.email for user in users}
+
+        reads: list[ApplicationNoteRead] = []
+        for note in notes:
+            read = ApplicationNoteRead.model_validate(note)
+            email = emails_by_id.get(note.created_by) if note.created_by else None
+            read.author_name = (
+                _author_name_from_email(email) if email is not None else "Staff"
+            )
+            reads.append(read)
+        return reads
 
     async def list(
         self, params: PageParams, *, application_id: int | None = None

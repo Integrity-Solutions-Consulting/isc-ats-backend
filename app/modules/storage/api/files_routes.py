@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile, status
@@ -10,7 +11,11 @@ from app.core.dependencies import CurrentUserDep, SessionDep
 from app.core.rate_limit import UPLOAD_LIMIT, limiter
 from app.modules.auth.api.authorization import require_permission
 from app.modules.storage.api.files_schemas import FileCreate, FileRead, FileUpdate
-from app.modules.storage.application.files_service import FileNotFoundError, FileService
+from app.modules.storage.application.files_service import (
+    FileNotFoundError,
+    FileOwnershipError,
+    FileService,
+)
 from app.modules.storage.application.upload_validation import (
     MAX_UPLOAD_BYTES,
     UploadTooLargeError,
@@ -19,7 +24,7 @@ from app.modules.storage.application.upload_validation import (
 )
 from app.modules.storage.infrastructure.minio_client import minio_client, upload_file_to_minio
 from app.modules.storage.infrastructure.models import File
-from app.shared.ownership import forbid_candidate_portal, require_owner
+from app.shared.ownership import forbid_candidate_portal, is_candidate_portal, require_owner
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
@@ -29,6 +34,16 @@ router = APIRouter(prefix="/files", tags=["storage · files"])
 
 # Polymorphic entity_type vocabulary (schema.sql: storage.files.entity_type).
 FILE_ENTITY_TYPES = {"cv", "avatar", "vacancy_image", "word_doc"}
+# Entity types a candidate-portal token may use; the rest are staff-only.
+_CANDIDATE_ENTITY_TYPES = {"cv", "avatar"}
+
+# Characters unsafe for HTTP header values (Content-Disposition).
+_UNSAFE_FILENAME_RE = re.compile(r'[\r\n"\\]')
+
+
+def _safe_filename(name: str) -> str:
+    """Strip characters that could break or inject into Content-Disposition."""
+    return _UNSAFE_FILENAME_RE.sub("_", name)
 
 
 def get_service(session: SessionDep) -> FileService:
@@ -86,7 +101,11 @@ async def get_file(
 async def create_file(
     data: FileCreate, service: ServiceDep, current_user: CurrentUserDep
 ) -> FileRead:
-    return FileRead.model_validate(await service.create(data, current_user))
+    try:
+        created = await service.create(data, current_user)
+    except FileOwnershipError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    return FileRead.model_validate(created)
 
 
 @router.patch(
@@ -153,7 +172,8 @@ async def download_file(
             obj.close()
             obj.release_conn()
 
-    headers = {"Content-Disposition": f'attachment; filename="{file.original_name}"'}
+    safe_name = _safe_filename(file.original_name or "download")
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
     if file.size_bytes:
         headers["Content-Length"] = str(file.size_bytes)
 
@@ -197,6 +217,13 @@ async def upload_file(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"entity_type must be one of: {', '.join(sorted(FILE_ENTITY_TYPES))}",
         )
+    # Candidates may only upload their own CVs and avatars; staff-only types
+    # (vacancy_image, word_doc) are rejected for candidate-portal tokens.
+    if is_candidate_portal(current_user) and entity_type not in _CANDIDATE_ENTITY_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Candidate uploads restricted to: {', '.join(sorted(_CANDIDATE_ENTITY_TYPES))}",
+        )
 
     # Read at most one byte past the cap so an oversized body is rejected without
     # ever materializing the whole payload in memory.
@@ -235,5 +262,7 @@ async def upload_file(
         entity_type=entity_type,
         entity_id=entity_id,
     )
-    created = await service.create(file_record, current_user)
+    # trusted=True: bucket and stored_key are server-generated here, so the
+    # client-supplied-key IDOR gate does not apply.
+    created = await service.create(file_record, current_user, trusted=True)
     return FileRead.model_validate(created)

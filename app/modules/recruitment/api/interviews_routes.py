@@ -282,7 +282,7 @@ async def _notify_slot_confirmed(interview_id: int) -> None:
 
             # 1) Email to HR / interviewer (+ extra_email)
             rendered = render_slot_confirmed_email(
-                interviewer_first_name=interviewer.email.split("@")[0],
+                interviewer_first_name=_author_name_from_email(interviewer.email),
                 candidate_full_name=candidate_name,
                 vacancy_name=vn,
                 scheduled_at=interview.scheduled_at,
@@ -384,7 +384,9 @@ async def get_available_slots(
         slot_t = slot_time.time()
         dur = 60  # fallback
         for row in avail_rows:
-            if row.start_time <= slot_t < row.end_time:
+            r_start = row.start_time.replace(tzinfo=None) if hasattr(row.start_time, "tzinfo") and row.start_time.tzinfo is not None else row.start_time
+            r_end = row.end_time.replace(tzinfo=None) if hasattr(row.end_time, "tzinfo") and row.end_time.tzinfo is not None else row.end_time
+            if r_start <= slot_t < r_end:
                 dur = row.slot_duration_min
                 break
         slot_end = slot_start + timedelta(minutes=dur)
@@ -437,6 +439,11 @@ async def get_my_offers(
     service: ServiceDep, current_user: CurrentUserDep
 ) -> list[InterviewRead]:
     """The authenticated candidate's own open interview offers (status=offered)."""
+    if current_user.portal != "candidate":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los usuarios del portal de candidatos pueden ver sus ofertas",
+        )
     offers = await service.list_offers_for_candidate(current_user.user_id)
     return [InterviewRead.model_validate(o) for o in offers]
 
@@ -446,6 +453,11 @@ async def get_my_scheduled(
     service: ServiceDep, current_user: CurrentUserDep
 ) -> list[InterviewRead]:
     """The authenticated candidate's own scheduled (confirmed) interviews."""
+    if current_user.portal != "candidate":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los usuarios del portal de candidatos pueden ver sus entrevistas programadas",
+        )
     scheduled = await service.list_scheduled_for_candidate(current_user.user_id)
     return [InterviewRead.model_validate(s) for s in scheduled]
 
@@ -465,6 +477,11 @@ async def confirm_my_offer(
     409 on a double-booking. On success, creates the Teams meeting and emails the
     invitation in the background.
     """
+    if current_user.portal != "candidate":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los usuarios del portal de candidatos pueden confirmar ofertas",
+        )
     try:
         confirmed = await service.confirm_slot_for_candidate(
             interview_id, current_user.user_id, data.chosen_slot
@@ -553,6 +570,8 @@ async def update_interview(
         updated = await service.update(interview_id, data, current_user)
     except InterviewNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except InterviewDoubleBookingError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except InterviewReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except InterviewValidationError as exc:

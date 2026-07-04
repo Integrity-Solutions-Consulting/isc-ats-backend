@@ -213,3 +213,116 @@ async def test_register_candidate_raises_when_role_is_missing(session: AsyncSess
 
     with pytest.raises(AuthError, match="[Cc]andidate role"):
         await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
+
+
+async def test_register_candidate_rejects_email_of_inactive_user(
+    session: AsyncSession,
+) -> None:
+    """An email already held by an INACTIVE user must block registration.
+
+    get_by_email filters is_active==True; register_candidate must instead check
+    across all rows so a deactivated account's email can't be re-registered.
+    """
+    from app.modules.auth.application.auth_service import EmailAlreadyExistsError
+
+    await _bootstrap_candidate_role(session)
+    portal = await ParameterRepository(session).get_by_type_and_code(
+        "user_portal", "candidate"
+    )
+    assert portal is not None
+    email = f"inactive-{uuid.uuid4().hex[:10]}@test.local"
+    inactive = User(
+        email=email,
+        password_hash=hash_password("Pass1234!"),
+        portal_id=portal.id,
+        email_verified=True,
+        is_active=False,
+    )
+    await UserRepository(session).add(inactive)
+
+    with pytest.raises(EmailAlreadyExistsError):
+        await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
+
+
+# ---------------------------------------------------------------------------
+# reset_password — lifts the login throttle lock
+# ---------------------------------------------------------------------------
+
+
+async def test_reset_password_lifts_login_lock(session: AsyncSession) -> None:
+    """A successful password reset must clear the login throttle lock, so a user
+    who was locked out (and therefore reset their password) can log in again."""
+    from app.core.security import create_password_reset_token
+
+    user = await _make_staff_user(session, email="locked-reset@integrity.com.ec")
+    throttle = InMemoryLoginThrottle()
+    service = _service_with_throttle(session, throttle)
+
+    # Trip the lock.
+    for _ in range(MAX_FAILED_ATTEMPTS):
+        with pytest.raises(InvalidCredentialsError):
+            await service.login("locked-reset@integrity.com.ec", "wrong", "127.0.0.1")
+    assert await throttle.locked_for("locked-reset@integrity.com.ec") is not None
+
+    assert user.password_hash is not None
+    token = create_password_reset_token(user.id, user.password_hash)
+    await service.reset_password(token, "BrandNewPass9!")
+
+    # The lock is gone; a correct login succeeds immediately.
+    assert await throttle.locked_for("locked-reset@integrity.com.ec") is None
+    tokens = await service.login(
+        "locked-reset@integrity.com.ec", "BrandNewPass9!", "127.0.0.1"
+    )
+    assert tokens.access_token
+
+
+# ---------------------------------------------------------------------------
+# refresh — reuse detection revokes the token family
+# ---------------------------------------------------------------------------
+
+
+async def test_refresh_reuse_revokes_family(session: AsyncSession) -> None:
+    """Presenting a valid-but-already-rotated refresh token (reuse) must revoke
+    every refresh token for the user, not just reject the request."""
+    from datetime import UTC, datetime
+
+    from app.core.token_denylist import InMemoryTokenDenylist
+    from app.modules.auth.application.auth_service import InvalidRefreshTokenError
+    from app.modules.auth.infrastructure.models import RefreshToken
+
+    user = await _make_staff_user(session, email="reuse@integrity.com.ec")
+    denylist = InMemoryTokenDenylist()
+    service = AuthService(
+        UserRepository(session),
+        RefreshTokenRepository(session),
+        ParameterRepository(session),
+        token_denylist=denylist,
+    )
+
+    # A first login issues a valid refresh token pair.
+    tokens = await service.login("reuse@integrity.com.ec", "secret123", "127.0.0.1")
+
+    # Rotate it once (the presented token is now revoked in storage).
+    rotated = await service.refresh(tokens.refresh_token, "127.0.0.1")
+    assert rotated.refresh_token
+
+    # Replaying the ORIGINAL (now-rotated) token is reuse: reject AND revoke the
+    # whole family, including the freshly rotated token.
+    with pytest.raises(InvalidRefreshTokenError):
+        await service.refresh(tokens.refresh_token, "127.0.0.1")
+
+    # Every refresh token for this user must now be revoked.
+    active = list(
+        (
+            await session.execute(
+                select(RefreshToken)
+                .where(RefreshToken.user_id == user.id)
+                .where(RefreshToken.revoked_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert active == []
+    # And the access-token denylist marker is set for the user.
+    assert await denylist.is_user_revoked(user.id, int(datetime.now(UTC).timestamp())) is True

@@ -298,6 +298,7 @@ async def update_application(
     application_id: int,
     data: ApplicationUpdate,
     service: ServiceDep,
+    session: SessionDep,
     current_user: CurrentUserDep,
     task_queue: TaskQueueDep,
 ) -> ApplicationRead:
@@ -305,6 +306,7 @@ async def update_application(
         existing = await service.get(application_id)
     except ApplicationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    await _require_candidate_owner(session, current_user, existing.candidate_id)
     old_stage_id = existing.current_stage_id
     try:
         updated = await service.update(application_id, data, current_user)
@@ -343,7 +345,8 @@ async def generate_profile(
     try:
         doc_bytes = await generate_profile_word(application_id)
     except Exception as exc:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
+        logger.exception("Failed to generate profile document for application %s", application_id)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Error generando el perfil") from exc
 
     # ── Register the generated document in storage + application_documents ────
     try:
@@ -351,38 +354,39 @@ async def generate_profile(
         mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         stored_key = upload_file_to_minio(doc_bytes, file_name, mime)
 
-        file_record = File(
-            original_name=file_name,
-            stored_key=stored_key,
-            bucket="candidates-cvs",
-            mime_type=mime,
-            size_bytes=len(doc_bytes),
-            is_public=False,
-            entity_type="application_word",
-            entity_id=application_id,
-            created_by=current_user.user_id,
-            ip_created=current_user.ip,
-        )
-        session.add(file_record)
-        await session.flush()
-
-        # Resolve the "generated" status parameter
-        status_param = await ParameterRepository(session).get_by_type_and_code(
-            "doc_generation_status", "generated"
-        )
-        if status_param is not None:
-            doc_record = ApplicationDocument(
-                application_id=application_id,
-                file_id=file_record.id,
-                status_id=status_param.id,
+        async with async_session_factory() as storage_session:
+            file_record = File(
+                original_name=file_name,
+                stored_key=stored_key,
+                bucket="candidates-cvs",
+                mime_type=mime,
+                size_bytes=len(doc_bytes),
+                is_public=False,
+                entity_type="application_word",
+                entity_id=application_id,
                 created_by=current_user.user_id,
                 ip_created=current_user.ip,
             )
-            session.add(doc_record)
-            await session.commit()
+            storage_session.add(file_record)
+            await storage_session.flush()
+
+            # Resolve the "generated" status parameter
+            status_param = await ParameterRepository(storage_session).get_by_type_and_code(
+                "doc_generation_status", "generated"
+            )
+            if status_param is not None:
+                doc_record = ApplicationDocument(
+                    application_id=application_id,
+                    file_id=file_record.id,
+                    status_id=status_param.id,
+                    created_by=current_user.user_id,
+                    ip_created=current_user.ip,
+                )
+                storage_session.add(doc_record)
+                await storage_session.commit()
     except Exception:
         # Storage registration is best-effort — do not fail the download
-        await session.rollback()
+        logger.exception("Failed to register generated profile document in storage")
 
     return StreamingResponse(
         io.BytesIO(doc_bytes),

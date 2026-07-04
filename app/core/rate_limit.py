@@ -31,10 +31,15 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Res
     slowapi's default handler omits Retry-After; clients (and our frontend) rely
     on it to back off, so we set it from the tripped limit's window length.
     """
-    try:
-        retry_after = exc.limit.limit.get_expiry()
-    except Exception:
-        retry_after = 60
+    # BUG-16: Use getattr/hasattr to check for get_expiry method safely since slowapi's
+    # internal API could change. Fall back to 60 seconds if it's unavailable.
+    retry_after = 60
+    limit_obj = getattr(exc.limit, "limit", None)
+    if limit_obj is not None and hasattr(limit_obj, "get_expiry"):
+        try:
+            retry_after = limit_obj.get_expiry()
+        except Exception:
+            pass
     return JSONResponse(
         status_code=429,
         content={"detail": "Demasiadas solicitudes. Intentá nuevamente más tarde."},

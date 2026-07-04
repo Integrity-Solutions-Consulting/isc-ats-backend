@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.core.login_throttle import LoginThrottle
@@ -152,6 +152,16 @@ class AuthService:
 
         stored = await self.refresh_tokens.get_valid_by_hash(hash_token(refresh_token))
         if stored is None:
+            # Reuse detection: the JWT is valid and unexpired, yet no active stored
+            # token matches its hash. That means this token was already rotated
+            # away (revoked) and is being replayed — a classic refresh-token theft
+            # signal. Kill the whole family (all refresh + access tokens) so a
+            # stolen-but-rotated token can't be used to bootstrap a new session.
+            sub = payload.get("sub")
+            if sub is not None:
+                user_id = int(sub)
+                await self.refresh_tokens.revoke_all_by_user_id(user_id)
+                await self._revoke_access_tokens(user_id)
             raise InvalidRefreshTokenError("Refresh token revoked or unknown")
 
         user = await self.users.get(int(payload["sub"]))
@@ -205,7 +215,15 @@ class AuthService:
         )
 
     async def register_candidate(self, email: str, password: str, ip: str | None) -> User:
-        existing_user = await self.users.get_by_email(email)
+        # Any row holding this email blocks registration — INCLUDING inactive
+        # accounts. get_by_email filters is_active==True, which would let a
+        # re-registration create a duplicate row (and hit the DB unique index) for
+        # a deactivated user. Look up by normalized email across all rows instead.
+        normalized_email = email.strip().lower()
+        existing_stmt = select(User).where(func.lower(User.email) == normalized_email)
+        existing_user = (
+            await self.users.session.execute(existing_stmt)
+        ).scalar_one_or_none()
         if existing_user is not None:
             raise EmailAlreadyExistsError("El correo electrónico ya está registrado")
 
@@ -329,6 +347,12 @@ class AuthService:
         await self.users.session.flush()
         await self.refresh_tokens.revoke_all_by_user_id(user.id)
         await self._revoke_access_tokens(user.id)
+        # A user who forgot their password may have tripped the login throttle;
+        # a successful reset proves ownership, so lift the lock (mirrors the
+        # reset on a successful login) — otherwise they stay locked out despite
+        # the new password.
+        if self.login_throttle is not None:
+            await self.login_throttle.reset(user.email)
 
     async def verify_email(self, token: str) -> None:
         try:
@@ -343,6 +367,9 @@ class AuthService:
         user = await self.users.get(user_id)
         if user is None:
             raise InvalidTokenError("Usuario no encontrado")
+
+        if user.email_verified:
+            raise InvalidTokenError("El enlace ya fue utilizado o ha expirado")
 
         user.email_verified = True
         await self.users.session.flush()

@@ -230,6 +230,23 @@ async def test_update_role_endpoint_200(
     assert r.json()["name"].startswith("Edited-")
 
 
+async def test_update_role_rejects_explicit_null_name(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """An explicit null name must be rejected (422), not written into the NOT NULL
+    column where it would 500."""
+    admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
+    service = _service(session)
+    role = await service.create(RoleCreate(name=f"NullName-{uuid.uuid4().hex[:8]}"), ACTOR)
+
+    r = await client.patch(
+        f"{ROLES_URL}/{role.id}",
+        json={"name": None},
+        headers=_bearer(admin.user_id),
+    )
+    assert r.status_code == 422
+
+
 async def test_update_system_role_endpoint_409(
     client: AsyncClient, session: AsyncSession
 ) -> None:

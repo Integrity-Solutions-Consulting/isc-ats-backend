@@ -68,6 +68,7 @@ async def list_vacancies_public(
     params = PageParams(page=page, size=size)
     items, total = await repo.list_expanded(
         params,
+        status_code="active",
         include_inactive=False,
     )
     public_items = [
@@ -88,9 +89,8 @@ async def list_vacancies_public(
             created_at=v.created_at,
         )
         for v in items
-        if v.vacancy_status == "active"
     ]
-    return Page.create(public_items, len(public_items), params)
+    return Page.create(public_items, total, params)
 
 
 @router.get(
@@ -323,10 +323,6 @@ async def get_vacancy_documents(
     for row in reversed(rows):  # oldest first to assign version numbers
         version_map[row.candidate_id] = version_map.get(row.candidate_id, 0) + 1
 
-    version_counters: dict[int, int] = {}
-    for row in reversed(rows):
-        version_counters[row.candidate_id] = version_counters.get(row.candidate_id, 0) + 1
-
     # Re-iterate in original (desc) order for output
     version_assign: dict[int, int] = {}
     items = []
@@ -334,7 +330,7 @@ async def get_vacancy_documents(
         version_assign[row.candidate_id] = version_assign.get(row.candidate_id, 0) + 1
         ver = version_map.get(row.candidate_id, 1) - version_assign[row.candidate_id] + 1
 
-        initials = (row.first_name[:1] + row.last_name[:1]).upper()
+        initials = ((row.first_name[:1] or "?") + (row.last_name[:1] or "?")).upper()
         color = avatar_colors[row.candidate_id % len(avatar_colors)]
         author = _author_name_from_email(row.author_email)
         fname = row.original_name or f"perfil_{row.application_id}.docx"
@@ -384,6 +380,8 @@ async def get_vacancy_pipeline(vacancy_id: int, session: SessionDep) -> Pipeline
     ]
 
     # Virtual "Rechazado" stage — always appended last so the board always shows it.
+    # BUG-22: Note that stageId="rejected" is a sentinel string recognized by the
+    # frontend to render the rejected candidates column.
     stages.append(PipelineStageSchema(
         id="rejected",
         vacancyId=str(vacancy_id),
@@ -399,7 +397,7 @@ async def get_vacancy_pipeline(vacancy_id: int, session: SessionDep) -> Pipeline
             vacancyId=str(c.vacancy_id),
             stageId=str(c.current_stage_id) if c.current_stage_id else "rejected",
             candidateName=f"{c.first_name} {c.last_name}",
-            initials=(c.first_name[0] + c.last_name[0]).upper(),
+            initials=((c.first_name[:1] or "?") + (c.last_name[:1] or "?")).upper(),
             avatarColor=avatar_colors[c.candidate_id % len(avatar_colors)],
             avatarFileId=c.avatar_file_id,
             matchPercent=float(c.match_score) if c.match_score else None,

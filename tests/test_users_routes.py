@@ -133,13 +133,13 @@ async def test_list_users_includes_role_names(
     """A user with an assigned active role must appear with that role name in the list."""
     admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
 
-    # Find the admin role that was just bootstrapped (name="admin")
+    # Find the admin role that was just bootstrapped (name="Administrador")
     from sqlalchemy import select
     from app.modules.auth.infrastructure.models import Role
 
     role = (
         await session.execute(
-            select(Role).where(Role.name == "admin").where(Role.is_active.is_(True))
+            select(Role).where(Role.name == "Administrador").where(Role.is_active.is_(True))
         )
     ).scalar_one()
 
@@ -149,7 +149,7 @@ async def test_list_users_includes_role_names(
 
     found = await _find_user_in_list(client, _bearer(admin.user_id), target.id)
     assert found is not None, "Created user not found in list"
-    assert "admin" in found["roles"]
+    assert "Administrador" in found["roles"]
 
 
 async def test_list_users_has_empty_roles_when_no_assignment(
@@ -276,7 +276,7 @@ async def test_create_user_requires_permission(
     actor = await _make_user(session)
     response = await client.post(
         USERS_URL,
-        json={"email": f"{uuid.uuid4().hex[:8]}@x.com", "password": "Abc123!", "role_id": 1},
+        json={"email": f"{uuid.uuid4().hex[:8]}@x.com", "password": "Abc1234!", "role_id": 1},
         headers=_bearer(actor.id),
     )
     assert response.status_code == 403
@@ -294,21 +294,21 @@ async def test_create_user_success(
 
     role = (
         await session.execute(
-            select(Role).where(Role.name == "admin").where(Role.is_active.is_(True))
+            select(Role).where(Role.name == "Administrador").where(Role.is_active.is_(True))
         )
     ).scalar_one()
 
     new_email = f"{uuid.uuid4().hex[:10]}@example.com"
     response = await client.post(
         USERS_URL,
-        json={"email": new_email, "password": "Abc123!", "role_id": role.id},
+        json={"email": new_email, "password": "Abc1234!", "role_id": role.id},
         headers=_bearer(admin.user_id),
     )
     assert response.status_code == 201
     body = response.json()
     assert body["email"] == new_email
     assert body["is_active"] is True
-    assert "admin" in body["roles"]
+    assert "Administrador" in body["roles"]
     assert body["id"] > 0
 
 
@@ -322,12 +322,12 @@ async def test_create_user_rejects_duplicate_email(
 
     role = (
         await session.execute(
-            select(Role).where(Role.name == "admin").where(Role.is_active.is_(True))
+            select(Role).where(Role.name == "Administrador").where(Role.is_active.is_(True))
         )
     ).scalar_one()
 
     email = f"{uuid.uuid4().hex[:10]}@example.com"
-    payload = {"email": email, "password": "Abc123!", "role_id": role.id}
+    payload = {"email": email, "password": "Abc1234!", "role_id": role.id}
 
     r1 = await client.post(USERS_URL, json=payload, headers=_bearer(admin.user_id))
     assert r1.status_code == 201
@@ -336,13 +336,110 @@ async def test_create_user_rejects_duplicate_email(
     assert r2.status_code == 409
 
 
+async def test_create_user_rejects_duplicate_email_case_insensitive(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """A differently-cased duplicate email must still be rejected with 409."""
+    from app.modules.auth.infrastructure.models import Role
+    from sqlalchemy import select
+
+    admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
+    role = (
+        await session.execute(
+            select(Role).where(Role.name == "Administrador").where(Role.is_active.is_(True))
+        )
+    ).scalar_one()
+
+    local = uuid.uuid4().hex[:10]
+    payload_lower = {"email": f"{local}@example.com", "password": "Abc1234!", "role_id": role.id}
+    payload_upper = {"email": f"{local.upper()}@EXAMPLE.com", "password": "Abc1234!", "role_id": role.id}
+
+    r1 = await client.post(USERS_URL, json=payload_lower, headers=_bearer(admin.user_id))
+    assert r1.status_code == 201
+
+    r2 = await client.post(USERS_URL, json=payload_upper, headers=_bearer(admin.user_id))
+    assert r2.status_code == 409
+
+
+async def test_create_user_rejects_missing_password(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Omitting the password must return 422, not a 500 from hashing None."""
+    from app.modules.auth.infrastructure.models import Role
+    from sqlalchemy import select
+
+    admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
+    role = (
+        await session.execute(
+            select(Role).where(Role.name == "Administrador").where(Role.is_active.is_(True))
+        )
+    ).scalar_one()
+
+    response = await client.post(
+        USERS_URL,
+        json={"email": f"{uuid.uuid4().hex[:10]}@example.com", "role_id": role.id},
+        headers=_bearer(admin.user_id),
+    )
+    assert response.status_code == 422
+
+
+async def test_patch_deactivation_revokes_refresh_tokens(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Deactivating a user via PATCH must revoke all their active refresh tokens."""
+    import uuid as _uuid
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from app.core.config import settings
+    from app.core.security import hash_token
+    from app.modules.auth.infrastructure.models import RefreshToken
+
+    admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
+    target = await _make_user(session)
+
+    expires_at = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
+    session.add(
+        RefreshToken(
+            user_id=target.id,
+            token_hash=hash_token(_uuid.uuid4().hex),
+            expires_at=expires_at,
+            ip_address="127.0.0.1",
+            created_by=target.id,
+            ip_created="127.0.0.1",
+        )
+    )
+    await session.flush()
+
+    response = await client.patch(
+        f"{USERS_URL}/{target.id}",
+        json={"is_active": False},
+        headers=_bearer(admin.user_id),
+    )
+    assert response.status_code == 200
+
+    active = list(
+        (
+            await session.execute(
+                select(RefreshToken)
+                .where(RefreshToken.user_id == target.id)
+                .where(RefreshToken.revoked_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert active == []
+
+
 async def test_create_user_rejects_invalid_role(
     client: AsyncClient, session: AsyncSession
 ) -> None:
     admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
     response = await client.post(
         USERS_URL,
-        json={"email": f"{uuid.uuid4().hex[:8]}@example.com", "password": "Abc123!", "role_id": 999999},
+        json={"email": f"{uuid.uuid4().hex[:8]}@example.com", "password": "Abc1234!", "role_id": 999999},
         headers=_bearer(admin.user_id),
     )
     assert response.status_code == 400
@@ -360,7 +457,7 @@ async def test_created_user_can_login(
 
     role = (
         await session.execute(
-            select(Role).where(Role.name == "admin").where(Role.is_active.is_(True))
+            select(Role).where(Role.name == "Administrador").where(Role.is_active.is_(True))
         )
     ).scalar_one()
 

@@ -117,11 +117,14 @@ class SlotGenerationService:
             else:
                 bs = booked_start.replace(tzinfo=UTC)
                 be = booked_end.replace(tzinfo=UTC)
-            # Only include if it falls on the target date (UTC day)
-            if bs.date() == target_date or be.date() == target_date:
-                booked_times.append(
-                    (bs.timetz().replace(tzinfo=None), be.timetz().replace(tzinfo=None))
-                )
+            
+            bs_date = bs.date()
+            be_date = be.date()
+            if bs_date <= target_date <= be_date:
+                start_time = bs.time() if bs_date == target_date else time(0, 0)
+                end_time = be.time() if be_date == target_date else time(23, 59, 59)
+                if start_time < end_time:
+                    booked_times.append((start_time, end_time))
 
         result: list[datetime] = []
         for window in windows:

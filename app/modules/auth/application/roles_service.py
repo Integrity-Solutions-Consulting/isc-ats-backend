@@ -7,7 +7,7 @@ from app.shared.pagination import PageParams
 from app.shared.repository import BaseRepository
 
 # System roles are bootstrap-managed and may not be renamed or deleted.
-SYSTEM_ROLE_NAMES: frozenset[str] = frozenset({"admin", "candidate"})
+SYSTEM_ROLE_NAMES: frozenset[str] = frozenset({"Administrador", "candidate"})
 
 
 class RoleNotFoundError(Exception):
@@ -77,6 +77,11 @@ class RoleService:
     async def update(self, role_id: int, data: RoleUpdate, actor: CurrentUser) -> Role:
         role = await self.get(role_id)
         changes = data.model_dump(exclude_unset=True)
+        # name maps to a NOT NULL column: an explicit null would 500 on flush.
+        # The schema already rejects it, but guard here too so a service-level
+        # caller can't bypass the boundary.
+        if "name" in changes and changes["name"] is None:
+            del changes["name"]
         if role.name in SYSTEM_ROLE_NAMES:
             # System roles cannot be renamed or deleted, but other fields (e.g. description) may pass through unchanged.
             if "name" in changes and changes["name"] != role.name:

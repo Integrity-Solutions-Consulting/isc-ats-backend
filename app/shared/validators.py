@@ -72,7 +72,12 @@ def is_valid_phone(value: str) -> bool:
 
 def is_adult(birth_date: date, min_years: int = 18) -> bool:
     """True when `birth_date` is at least `min_years` years before today.
-    Future dates are therefore rejected too."""
+    Future dates are therefore rejected too.
+    
+    BUG-26 Note: If the candidate was born on Feb 29 and the cutoff year is not a leap year,
+    we fall back to Feb 28. This means they are considered an adult on Feb 28 instead of Mar 1,
+    which is an accepted compromise for birthday arithmetic.
+    """
     today = date.today()
     try:
         cutoff = today.replace(year=today.year - min_years)

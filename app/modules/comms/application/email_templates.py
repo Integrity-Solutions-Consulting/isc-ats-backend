@@ -626,3 +626,74 @@ def render_slot_confirmed_email(
 </html>"""
 
     return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
+
+
+def render_random_password_email(email: str, password_raw: str) -> RenderedEmail:
+    """Random password email for a new staff user."""
+    from app.core.config import settings
+    subject = "Tu cuenta ha sido creada — Integrity Solutions"
+    login_url = f"{settings.frontend_base_url}/login"
+
+    text_body = (
+        "¡Hola!\n\n"
+        "Tu cuenta de usuario en el portal de reclutamiento de Integrity Solutions ha sido creada.\n\n"
+        f"Correo electrónico: {email}\n"
+        f"Contraseña temporal: {password_raw}\n\n"
+        "Por motivos de seguridad, debes ingresar al sistema y cambiar tu contraseña de inmediato:\n"
+        f"{login_url}\n\n"
+        "Si no reconoces este correo o no solicitaste la creación de esta cuenta, por favor contacta con soporte."
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html lang="es">
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="background:{_PRIMARY};padding:24px 32px;color:#ffffff;font-size:18px;font-weight:bold;">
+                Integrity Solutions
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;color:#111827;">
+                <h1 style="margin:0 0 12px;font-size:22px;">Tu cuenta ha sido creada</h1>
+                <p style="margin:0 0 20px;font-size:15px;line-height:1.5;color:#374151;">
+                  Tu cuenta de usuario en el portal de reclutamiento de Integrity Solutions ha sido creada exitosamente.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 24px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;padding:16px 20px;color:#111827;font-size:15px;line-height:1.6;">
+                  <tr>
+                    <td>
+                      <strong>Usuario:</strong> {email}<br/>
+                      <strong>Contraseña temporal:</strong> <code style="font-family:monospace;background:#e5e7eb;padding:2px 6px;border-radius:4px;font-size:14px;">{password_raw}</code>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 24px;font-size:15px;line-height:1.5;color:#374151;">
+                  Por motivos de seguridad, debes ingresar al sistema y cambiar tu contraseña de inmediato.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="border-radius:8px;background:{_PRIMARY};">
+                      <a href="{login_url}"
+                         style="display:inline-block;padding:14px 28px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;">
+                        Iniciar sesión y cambiar contraseña
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0;font-size:13px;color:#6b7280;">
+                  Si no reconoces este correo o no solicitaste la creación de esta cuenta, por favor contacta con soporte.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+
+    return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)

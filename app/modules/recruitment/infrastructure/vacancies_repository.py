@@ -61,6 +61,7 @@ class VacanciesExpandedRepository:
         *,
         client_company_id: int | None = None,
         status_id: int | None = None,
+        status_code: str | None = None,
         department_id: int | None = None,
         include_inactive: bool = False,
     ) -> tuple[list[VacancyExpanded], int]:
@@ -114,6 +115,8 @@ class VacanciesExpandedRepository:
             stmt = stmt.where(Vacancy.client_company_id == client_company_id)
         if status_id is not None:
             stmt = stmt.where(Vacancy.status_id == status_id)
+        if status_code is not None:
+            stmt = stmt.where(StatusParam.code == status_code)
         if department_id is not None:
             stmt = stmt.where(Vacancy.department_id == department_id)
 

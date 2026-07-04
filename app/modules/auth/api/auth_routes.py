@@ -154,6 +154,9 @@ async def _send_password_reset_email(user_id: int, to_email: str) -> None:
             await session.rollback()
 
 
+# BUG-27: Note that AuthService instances and their dependency closures (like has_profile_checker)
+# are request-scoped because they capture the transactional session. They must not be cached
+# or reused beyond the lifecycle of the current request.
 def get_service(session: SessionDep, request: Request) -> AuthService:
     async def candidate_has_profile(user_id: int) -> bool:
         return await CandidateRepository(session).get_by_user_id(user_id) is not None
@@ -363,8 +366,20 @@ async def delete_me(
         )
     # Auth layer: deactivate user + revoke all refresh tokens.
     await service.deactivate_user(current_user.user_id)
-    # Recruitment layer: deactivate candidate profile (no-op if absent).
-    await CandidateRepository(session).deactivate_by_user_id(current_user.user_id)
+    # Recruitment layer: deactivate candidate profile (no-op if absent) and all active applications.
+    candidate_repo = CandidateRepository(session)
+    candidate = await candidate_repo.get_by_user_id(current_user.user_id)
+    if candidate is not None:
+        await candidate_repo.deactivate_by_user_id(current_user.user_id)
+        from sqlalchemy import update
+        from app.modules.recruitment.infrastructure.application_models import Application
+        stmt = (
+            update(Application)
+            .where(Application.candidate_id == candidate.id)
+            .where(Application.is_active.is_(True))
+            .values(is_active=False)
+        )
+        await session.execute(stmt)
 
 
 # ── Background task registration (durable queue / inline) ─────────────────────

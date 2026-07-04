@@ -37,6 +37,8 @@ class BaseRepository[ModelT: Base]:
         if not include_inactive:
             stmt = stmt.where(self.model.is_active.is_(True))
         for field, value in (filters or {}).items():
+            if not hasattr(self.model, field):
+                raise ValueError(f"Invalid filter field '{field}' for model '{self.model.__name__}'")
             stmt = stmt.where(getattr(self.model, field) == value)
 
         count_stmt = select(func.count()).select_from(stmt.subquery())

@@ -76,6 +76,25 @@ async def test_revoking_role_drops_the_permission(session: AsyncSession) -> None
     assert await repo.list_permission_codes_for_user(user.id) == set()
 
 
+async def test_inactive_role_drops_the_permission(session: AsyncSession) -> None:
+    """A role marked is_active=False must confer no permissions, even while the
+    user_role link is still active."""
+    code = f"test.{uuid.uuid4().hex[:12]}"
+    user = await _wire_user_with_permission(session, code)
+    repo = AuthorizationRepository(session)
+    assert code in await repo.list_permission_codes_for_user(user.id)
+
+    # Deactivate the role directly (the user_role link stays active).
+    roles = await UserRoleRepository(session).list_roles_for_user(user.id)
+    assert roles
+    for role in roles:
+        role.is_active = False
+    await session.flush()
+
+    assert await repo.list_permission_codes_for_user(user.id) == set()
+    assert await repo.list_permission_ids_for_user(user.id) == set()
+
+
 async def test_user_without_roles_has_no_permissions(session: AsyncSession) -> None:
     portal = await ParameterRepository(session).get_by_type_and_code("user_portal", "staff")
     assert portal is not None

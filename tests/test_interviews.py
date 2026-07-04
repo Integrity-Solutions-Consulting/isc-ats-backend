@@ -207,3 +207,33 @@ async def test_create_availability_rejects_unknown_user(session: AsyncSession) -
             ),
             ACTOR,
         )
+
+
+async def test_update_interview_rejects_double_booking(session: AsyncSession) -> None:
+    from app.modules.recruitment.api.interviews_schemas import InterviewUpdate
+    from app.modules.recruitment.application.interviews_service import InterviewDoubleBookingError
+
+    app_, stage, interviewer, param = await _make_interview_graph(session)
+    svc = _interview_service(session)
+    
+    # 1. Create first interview
+    start1 = datetime.now(UTC) + timedelta(days=1)
+    payload1 = _interview_payload(app_, stage, interviewer, param)
+    payload1.scheduled_at = start1
+    payload1.ends_at = start1 + timedelta(hours=1)
+    i1 = await svc.create(payload1, ACTOR)
+    
+    # 2. Create second interview at a different time
+    start2 = start1 + timedelta(hours=3)
+    payload2 = _interview_payload(app_, stage, interviewer, param)
+    payload2.scheduled_at = start2
+    payload2.ends_at = start2 + timedelta(hours=1)
+    i2 = await svc.create(payload2, ACTOR)
+    
+    # 3. Try to update second interview to overlap with the first one -> should raise InterviewDoubleBookingError
+    update_payload = InterviewUpdate(
+        scheduled_at=start1 + timedelta(minutes=30),  # Overlaps [start1, start1 + 1h)
+        ends_at=start1 + timedelta(hours=1, minutes=30),
+    )
+    with pytest.raises(InterviewDoubleBookingError):
+        await svc.update(i2.id, update_payload, ACTOR)

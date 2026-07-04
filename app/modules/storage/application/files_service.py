@@ -1,3 +1,6 @@
+from sqlalchemy import select
+
+from app.core.config import settings
 from app.core.dependencies import CurrentUser
 from app.modules.storage.api.files_schemas import FileCreate, FileUpdate
 from app.modules.storage.infrastructure.models import File
@@ -11,6 +14,11 @@ class FileNotFoundError(Exception):
 
 class FileDuplicateKeyError(Exception):
     """stored_key already exists — object storage keys must be globally unique."""
+
+
+class FileOwnershipError(Exception):
+    """The client-supplied bucket/stored_key does not originate from the caller's
+    own upload flow — rejected to prevent IDOR."""
 
 
 class FileService:
@@ -42,13 +50,52 @@ class FileService:
             raise FileNotFoundError(f"File {file_id} not found")
         return f
 
-    async def create(self, data: FileCreate, actor: CurrentUser) -> File:
+    async def create(
+        self, data: FileCreate, actor: CurrentUser, *, trusted: bool = False
+    ) -> File:
+        """Persist a File metadata row.
+
+        `trusted=True` is used ONLY by the server-driven /files/upload flow, where
+        the bucket and stored_key are generated server-side and are therefore
+        safe. Every client-facing path (POST /files) MUST leave `trusted=False`
+        so the bucket/stored_key ownership gate runs — otherwise a caller could
+        register a File row pointing at an arbitrary bucket + another user's
+        stored_key and then download it (IDOR).
+        """
+        if not trusted:
+            await self._assert_owned_key(data, actor)
         f = File(
             **data.model_dump(),
             created_by=actor.user_id,
             ip_created=actor.ip,
         )
         return await self.repository.add(f)
+
+    async def _assert_owned_key(self, data: FileCreate, actor: CurrentUser) -> None:
+        """Reject an IDOR: a client-supplied bucket/stored_key that does not
+        originate from the caller's own /files/upload flow.
+
+        Two gates:
+        1. The bucket must be the single application bucket — a client may not
+           point a File row at an arbitrary bucket.
+        2. The stored_key must reference an object the caller already uploaded.
+           /files/upload creates the canonical File row (created_by = caller), so
+           a legitimate registration references that row. If no row exists, or it
+           belongs to a DIFFERENT user, the caller is trying to claim an object
+           that is not theirs.
+        """
+        if data.bucket != settings.minio_bucket:
+            raise FileOwnershipError(
+                f"bucket must be '{settings.minio_bucket}'"
+            )
+        stmt = select(File).where(File.stored_key == data.stored_key)
+        existing = (
+            await self.repository.session.execute(stmt)
+        ).scalar_one_or_none()
+        if existing is None or existing.created_by != actor.user_id:
+            raise FileOwnershipError(
+                "stored_key does not originate from your own upload"
+            )
 
     async def update(self, file_id: int, data: FileUpdate, actor: CurrentUser) -> File:
         f = await self.get(file_id)

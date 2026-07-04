@@ -83,8 +83,8 @@ class AvailableSlotsService:
             .where(Interview.interviewer_id == interviewer_id)
             .where(Interview.is_active.is_(True))
             .where(Interview.scheduled_at.is_not(None))
-            .where(Interview.scheduled_at >= day_start)
-            .where(Interview.scheduled_at <= day_end)
+            .where(Interview.scheduled_at < day_end)
+            .where(Interview.ends_at > day_start)
         )
         if cancelled_id is not None:
             booked_stmt = booked_stmt.where(Interview.status_id != cancelled_id)
