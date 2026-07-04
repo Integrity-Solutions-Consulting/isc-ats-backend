@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.core.dependencies import CurrentUserDep, SessionDep
+from app.core.task_queue import TaskQueueDep, register_task
 from app.core.security import hash_password
 from app.modules.auth.api.authorization import require_permission
 from app.modules.auth.infrastructure.models import Role, User, UserRole
@@ -121,20 +122,27 @@ async def create_user(
     data: UserCreate,
     session: SessionDep,
     current_user: CurrentUserDep,
+    task_queue: TaskQueueDep,
 ) -> UserRead:
-    """Create a staff-portal user with an initial password and an assigned role.
-
-    The admin provides the initial password directly (no email infrastructure).
-    The user can log in immediately with the given credentials.
+    """Create a staff-portal user with an assigned role.
+    
+    If the password is not provided, a random secure password will be generated
+    and sent to the user via email.
     """
-    # Password is required here: UserCreate.password is Optional (the field is
-    # reused by flows that mint passwordless accounts), but this route hashes it
-    # unconditionally, so a missing password would 500. Reject it up front.
-    if data.password is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="password is required",
-        )
+    import secrets
+    import string
+
+    password_raw = data.password
+    if password_raw is None:
+        # Generate a secure random password satisfying the policy:
+        # Min 12 chars: 3 lowercase, 3 uppercase, 3 digits, 3 special.
+        lower = "".join(secrets.choice(string.ascii_lowercase) for _ in range(3))
+        upper = "".join(secrets.choice(string.ascii_uppercase) for _ in range(3))
+        digits = "".join(secrets.choice(string.digits) for _ in range(3))
+        special = "".join(secrets.choice("!@#$%^&*()-_=+") for _ in range(3))
+        all_chars = list(lower + upper + digits + special)
+        secrets.SystemRandom().shuffle(all_chars)
+        password_raw = "".join(all_chars)
 
     # Ensure the target role exists and is active.
     role = (
@@ -175,7 +183,7 @@ async def create_user(
     user = await repo.add(
         User(
             email=data.email,
-            password_hash=hash_password(data.password),
+            password_hash=hash_password(password_raw),
             portal_id=portal.id,
             email_verified=True,
             is_active=data.is_active,
@@ -191,6 +199,10 @@ async def create_user(
 
     ur = UserRead.model_validate(user)
     ur.roles = [role.name]
+    
+    if data.password is None:
+        task_queue.enqueue("send_random_password_email", user.email, password_raw)
+        
     return ur
 
 
@@ -242,3 +254,36 @@ async def update_user_status(
     ur = UserRead.model_validate(user)
     ur.roles = roles_map.get(user.id, [])
     return ur
+
+
+async def _send_random_password_email(to_email: str, password_raw: str) -> None:
+    from app.core.database import async_session_factory
+    from app.modules.comms.application.email_dispatch_service import EmailDispatchService
+    from app.modules.comms.application.email_templates import render_random_password_email
+    from app.modules.comms.domain.models import EmailMessage
+    from app.modules.comms.infrastructure.mailgun import build_email_sender
+    import logging
+
+    logger = logging.getLogger(__name__)
+    rendered = render_random_password_email(to_email, password_raw)
+    message = EmailMessage(
+        to_email=to_email,
+        subject=rendered.subject,
+        html_body=rendered.html_body,
+        text_body=rendered.text_body,
+    )
+    async with async_session_factory() as session:
+        try:
+            dispatch = EmailDispatchService(session, build_email_sender())
+            success = await dispatch.send(message)
+            await session.commit()
+            if not success:
+                logger.error(
+                    "Random password email delivery failed for %s",
+                    to_email,
+                )
+        except Exception:
+            logger.exception("Unexpected error sending random password email to %s", to_email)
+            await session.rollback()
+
+register_task("send_random_password_email", _send_random_password_email)
