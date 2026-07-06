@@ -65,12 +65,12 @@ async def test_new_and_existing_email_are_indistinguishable(
 async def test_reregister_inactive_email_is_indistinguishable(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """An email held by an INACTIVE account still blocks registration.
+    """Re-registering an INACTIVE account's email is indistinguishable from a new one.
 
-    register_candidate must look up the email including inactive rows; otherwise
-    a re-registration would try to insert a duplicate and either 500 on the DB
-    unique index or leak that the (deactivated) account exists. The response must
-    stay generic and never create a second row.
+    register_candidate looks up the email including inactive rows and treats a
+    deactivated candidate as a reactivation (reusing the same row), not a new
+    insert. Either way the response stays generic — it never leaks that the
+    account exists — and no second row is created.
     """
     from sqlalchemy import func, select
 

@@ -76,3 +76,43 @@ async def test_verify_email_rejects_invalid_token(client: AsyncClient) -> None:
     response = await client.post(VERIFY_URL, json={"token": "invalid-token-here"})
     assert response.status_code == 400
     assert "inválido" in response.json()["detail"].lower() or "expirado" in response.json()["detail"].lower()
+
+
+async def test_verify_reactivates_returning_candidate(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """A deactivated candidate's verification link switches the account AND profile back on."""
+    from sqlalchemy import select
+
+    from app.modules.recruitment.infrastructure.candidate_models import Candidate
+
+    portal_id = await _candidate_portal_id(session)
+    user = await UserRepository(session).add(
+        User(
+            email=f"{uuid.uuid4().hex[:12]}@test.local",
+            portal_id=portal_id,
+            email_verified=True,
+            is_active=False,
+        )
+    )
+    session.add(
+        Candidate(
+            user_id=user.id,
+            first_name="Ana",
+            last_name="Torres",
+            is_active=False,
+        )
+    )
+    await session.flush()
+    token = create_verification_token(user.id)
+
+    response = await client.post(VERIFY_URL, json={"token": token})
+    assert response.status_code == 200
+
+    refreshed_user = await UserRepository(session).get(user.id, include_inactive=True)
+    assert refreshed_user is not None
+    assert refreshed_user.is_active is True
+    candidate = (
+        await session.execute(select(Candidate).where(Candidate.user_id == user.id))
+    ).scalar_one()
+    assert candidate.is_active is True, "candidate profile must be restored on reactivation"

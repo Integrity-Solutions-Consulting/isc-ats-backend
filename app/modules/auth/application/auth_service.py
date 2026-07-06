@@ -54,6 +54,19 @@ class SamePasswordError(AuthError):
     pass
 
 
+@dataclass
+class RegistrationResult:
+    """Outcome of a candidate registration attempt.
+
+    `reactivation` is True when the email belonged to a deactivated candidate who
+    is coming back: the caller sends a reactivation email instead of a first-time
+    verification email. The account stays off until the link is clicked.
+    """
+
+    user: "User"
+    reactivation: bool
+
+
 class AccountLockedError(AuthError):
     """Too many failed logins for this account; temporarily locked.
 
@@ -214,22 +227,32 @@ class AuthService:
             has_profile=has_profile,
         )
 
-    async def register_candidate(self, email: str, password: str, ip: str | None) -> User:
-        # Any row holding this email blocks registration — INCLUDING inactive
-        # accounts. get_by_email filters is_active==True, which would let a
-        # re-registration create a duplicate row (and hit the DB unique index) for
-        # a deactivated user. Look up by normalized email across all rows instead.
+    async def register_candidate(
+        self, email: str, password: str, ip: str | None
+    ) -> RegistrationResult:
+        # Look up by normalized email across ALL rows (get_by_email filters
+        # is_active==True and would miss a deactivated account). An active row is a
+        # real conflict; an inactive CANDIDATE row is a returning user, handled as
+        # a reactivation instead of a hard block.
         normalized_email = email.strip().lower()
         existing_stmt = select(User).where(func.lower(User.email) == normalized_email)
         existing_user = (
             await self.users.session.execute(existing_stmt)
         ).scalar_one_or_none()
-        if existing_user is not None:
-            raise EmailAlreadyExistsError("El correo electrónico ya está registrado")
 
         portal = await self.parameters.get_by_type_and_code("user_portal", "candidate")
         if portal is None:
             raise AuthError("Portal de candidato no configurado")
+
+        if existing_user is not None:
+            if not existing_user.is_active and existing_user.portal_id == portal.id:
+                # Returning candidate: refresh the password now, but keep the
+                # account off until the reactivation link proves email ownership
+                # (see verify_email). Prevents takeover of an abandoned account.
+                existing_user.password_hash = hash_password(password)
+                await self.users.session.flush()
+                return RegistrationResult(user=existing_user, reactivation=True)
+            raise EmailAlreadyExistsError("El correo electrónico ya está registrado")
 
         hashed = hash_password(password)
         new_user = User(
@@ -257,7 +280,7 @@ class AuthService:
         self.users.session.add(user_role)
         await self.users.session.flush()
 
-        return new_user
+        return RegistrationResult(user=new_user, reactivation=False)
 
     async def get_unverified_user(self, email: str) -> User | None:
         """Return the user for `email` only if it exists and is not yet verified.
@@ -354,7 +377,15 @@ class AuthService:
         if self.login_throttle is not None:
             await self.login_throttle.reset(user.email)
 
-    async def verify_email(self, token: str) -> None:
+    async def verify_email(self, token: str) -> int:
+        """Confirm an email token and return the user id.
+
+        One verification token covers two cases:
+        - First-time activation: an unverified, active user becomes verified.
+        - Reactivation: a deactivated candidate who registered again is switched
+          back on. The caller reactivates the candidate profile (composition at
+          the API layer, mirroring delete_me).
+        """
         try:
             payload = decode_token(token)
         except jwt.PyJWTError as exc:
@@ -364,12 +395,21 @@ class AuthService:
             raise InvalidTokenError("Tipo de token no es de verificación")
 
         user_id = int(payload.get("sub", 0))
-        user = await self.users.get(user_id)
+        # include_inactive: a returning candidate stays deactivated until this click.
+        user = await self.users.get(user_id, include_inactive=True)
         if user is None:
             raise InvalidTokenError("Usuario no encontrado")
+
+        if not user.is_active:
+            # Reactivation: bring the account back and re-affirm verification.
+            user.is_active = True
+            user.email_verified = True
+            await self.users.session.flush()
+            return user_id
 
         if user.email_verified:
             raise InvalidTokenError("El enlace ya fue utilizado o ha expirado")
 
         user.email_verified = True
         await self.users.session.flush()
+        return user_id

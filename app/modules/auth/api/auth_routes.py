@@ -51,6 +51,7 @@ from app.modules.comms.application.email_sender import EmailMessage
 from app.modules.comms.application.email_templates import (
     render_account_exists_email,
     render_password_reset_email,
+    render_reactivation_email,
     render_verification_email,
 )
 from app.modules.comms.infrastructure.email_sender_factory import build_email_sender
@@ -91,6 +92,37 @@ async def _send_verification_email(user_id: int, to_email: str) -> None:
                 )
         except Exception:
             logger.exception("Unexpected error sending verification email to %s", to_email)
+            await session.rollback()
+
+
+async def _send_reactivation_email(user_id: int, to_email: str) -> None:
+    """Background task: send the reactivation link to a returning candidate.
+
+    Reuses the verification token/endpoint (clicking it switches the account back
+    on) but with reactivation-specific copy. Mirrors _send_verification_email:
+    own DB session, never propagates — the registration response already returned.
+    """
+    token = create_verification_token(user_id)
+    reactivation_url = f"{settings.frontend_base_url}/api/auth/verify?token={token}"
+    rendered = render_reactivation_email(reactivation_url)
+    message = EmailMessage(
+        to_email=to_email,
+        subject=rendered.subject,
+        html_body=rendered.html_body,
+        text_body=rendered.text_body,
+    )
+    async with async_session_factory() as session:
+        try:
+            dispatch = EmailDispatchService(session, build_email_sender())
+            success = await dispatch.send(message)
+            await session.commit()
+            if not success:
+                logger.error(
+                    "Reactivation email delivery failed for %s — check comms.email_logs",
+                    to_email,
+                )
+        except Exception:
+            logger.exception("Unexpected error sending reactivation email to %s", to_email)
             await session.rollback()
 
 
@@ -239,19 +271,21 @@ async def register(
     request: Request,
     task_queue: TaskQueueDep,
 ):
-    # Generic response in BOTH branches so the API never reveals whether an email
+    # Generic response in ALL branches so the API never reveals whether an email
     # is already registered (anti-enumeration). New account → verification email;
-    # existing account → a "you already have an account" email to the real owner.
+    # returning (deactivated) candidate → reactivation email; active account →
+    # a "you already have an account" email to the real owner.
     try:
-        user = await service.register_candidate(
+        result = await service.register_candidate(
             data.email, data.password, _client_ip(request)
         )
     except EmailAlreadyExistsError:
         await task_queue.enqueue("send_account_exists_email", data.email)
     else:
-        # Send the verification email out-of-band so a slow/failed SMTP call never
-        # blocks or fails the registration response.
-        await task_queue.enqueue("send_verification_email", user.id, user.email)
+        # Send the email out-of-band so a slow/failed SMTP call never blocks or
+        # fails the registration response.
+        task = "send_reactivation_email" if result.reactivation else "send_verification_email"
+        await task_queue.enqueue(task, result.user.id, result.user.email)
     return {
         "message": "Si el correo no estaba registrado, te enviamos un enlace de "
         "verificación. Revisa tu bandeja de entrada."
@@ -262,11 +296,15 @@ async def register(
 async def verify(
     data: VerifyRequest,
     service: ServiceDep,
+    session: SessionDep,
 ):
     try:
-        await service.verify_email(data.token)
+        user_id = await service.verify_email(data.token)
     except InvalidTokenError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    # Recruitment layer: restore the candidate profile for a returning candidate
+    # (no-op for a first-time activation, which has no deactivated profile).
+    await CandidateRepository(session).reactivate_by_user_id(user_id)
     return {"message": "Correo electrónico verificado exitosamente"}
 
 
@@ -384,5 +422,6 @@ async def delete_me(
 
 # ── Background task registration (durable queue / inline) ─────────────────────
 register_task("send_verification_email", _send_verification_email)
+register_task("send_reactivation_email", _send_reactivation_email)
 register_task("send_account_exists_email", _send_account_exists_email)
 register_task("send_password_reset_email", _send_password_reset_email)

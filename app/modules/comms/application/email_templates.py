@@ -84,6 +84,72 @@ def render_verification_email(verification_url: str) -> RenderedEmail:
     return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
 
 
+def render_reactivation_email(reactivation_url: str) -> RenderedEmail:
+    """Sent when a previously-closed candidate account registers again.
+
+    `reactivation_url` is the same verification link used for first-time
+    activation; clicking it switches the account back on and restores the
+    candidate profile. Wording makes the reactivation explicit (honest UX).
+    """
+    subject = "Reactiva tu cuenta — Integrity Solutions"
+
+    text_body = (
+        "¡Qué bueno tenerte de vuelta!\n\n"
+        "Recibimos una solicitud para reactivar tu cuenta. Para volver a "
+        "ingresar y recuperar tu perfil, abre este enlace:\n"
+        f"{reactivation_url}\n\n"
+        "El enlace vence en 24 horas. Si no solicitaste esto, ignora este correo."
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html lang="es">
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="background:{_PRIMARY};padding:24px 32px;color:#ffffff;font-size:18px;font-weight:bold;">
+                Integrity Solutions
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;color:#111827;">
+                <h1 style="margin:0 0 12px;font-size:22px;">Reactiva tu cuenta</h1>
+                <p style="margin:0 0 24px;font-size:15px;line-height:1.5;color:#374151;">
+                  ¡Qué bueno tenerte de vuelta! Para reactivar tu cuenta y
+                  recuperar tu perfil, haz clic en el siguiente botón.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="border-radius:8px;background:{_PRIMARY};">
+                      <a href="{reactivation_url}"
+                         style="display:inline-block;padding:14px 28px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;">
+                        Reactivar mi cuenta
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0;font-size:13px;line-height:1.5;color:#6b7280;">
+                  Si el botón no funciona, copia y pega este enlace en tu navegador:<br/>
+                  <a href="{reactivation_url}" style="color:{_PRIMARY};word-break:break-all;">{reactivation_url}</a>
+                </p>
+                <p style="margin:24px 0 0;font-size:13px;color:#6b7280;">
+                  El enlace vence en 24 horas. Si no solicitaste esto, ignora este correo.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+
+    return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
+
+
 def render_account_exists_email(login_url: str) -> RenderedEmail:
     """Sent when someone tries to register with an already-registered email.
 

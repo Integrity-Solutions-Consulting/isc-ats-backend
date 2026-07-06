@@ -179,13 +179,14 @@ async def test_register_candidate_assigns_candidate_role(session: AsyncSession) 
     await _bootstrap_candidate_role(session)
     email = f"cand-{uuid.uuid4().hex[:10]}@test.local"
 
-    user = await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
+    result = await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
 
+    assert result.reactivation is False
     assigned = (
         await session.execute(
             select(UserRole)
             .join(Role, Role.id == UserRole.role_id)
-            .where(UserRole.user_id == user.id)
+            .where(UserRole.user_id == result.user.id)
             .where(Role.name == CANDIDATE_ROLE_NAME)
         )
     ).scalar_one_or_none()
@@ -197,9 +198,9 @@ async def test_register_candidate_starts_unverified(session: AsyncSession) -> No
     await _bootstrap_candidate_role(session)
     email = f"cand-{uuid.uuid4().hex[:10]}@test.local"
 
-    user = await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
+    result = await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
 
-    assert user.email_verified is False
+    assert result.user.email_verified is False
 
 
 async def test_register_candidate_raises_when_role_is_missing(session: AsyncSession) -> None:
@@ -215,14 +216,43 @@ async def test_register_candidate_raises_when_role_is_missing(session: AsyncSess
         await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
 
 
-async def test_register_candidate_rejects_email_of_inactive_user(
+async def test_register_candidate_reactivates_inactive_candidate(
     session: AsyncSession,
 ) -> None:
-    """An email already held by an INACTIVE user must block registration.
+    """Re-registering an INACTIVE candidate's email is a reactivation, not a block.
 
-    get_by_email filters is_active==True; register_candidate must instead check
-    across all rows so a deactivated account's email can't be re-registered.
+    The password is refreshed and the caller is told to send a reactivation email,
+    but the account stays OFF (is_active False) until the email link is clicked —
+    only then is ownership proven. No second row is ever created.
     """
+    await _bootstrap_candidate_role(session)
+    portal = await ParameterRepository(session).get_by_type_and_code(
+        "user_portal", "candidate"
+    )
+    assert portal is not None
+    email = f"inactive-{uuid.uuid4().hex[:10]}@test.local"
+    old_hash = hash_password("OldPass1234!")
+    inactive = User(
+        email=email,
+        password_hash=old_hash,
+        portal_id=portal.id,
+        email_verified=True,
+        is_active=False,
+    )
+    await UserRepository(session).add(inactive)
+
+    result = await _service(session).register_candidate(email, "NewPass1234!", "127.0.0.1")
+
+    assert result.reactivation is True
+    assert result.user.id == inactive.id, "must reuse the same row, not create a new one"
+    assert result.user.is_active is False, "account stays off until the email link is clicked"
+    assert result.user.password_hash != old_hash, "password must be refreshed on reactivation"
+
+
+async def test_register_candidate_rejects_email_of_active_user(
+    session: AsyncSession,
+) -> None:
+    """An email held by an ACTIVE account is a real conflict and must be rejected."""
     from app.modules.auth.application.auth_service import EmailAlreadyExistsError
 
     await _bootstrap_candidate_role(session)
@@ -230,15 +260,15 @@ async def test_register_candidate_rejects_email_of_inactive_user(
         "user_portal", "candidate"
     )
     assert portal is not None
-    email = f"inactive-{uuid.uuid4().hex[:10]}@test.local"
-    inactive = User(
+    email = f"active-{uuid.uuid4().hex[:10]}@test.local"
+    active = User(
         email=email,
         password_hash=hash_password("Pass1234!"),
         portal_id=portal.id,
         email_verified=True,
-        is_active=False,
+        is_active=True,
     )
-    await UserRepository(session).add(inactive)
+    await UserRepository(session).add(active)
 
     with pytest.raises(EmailAlreadyExistsError):
         await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")

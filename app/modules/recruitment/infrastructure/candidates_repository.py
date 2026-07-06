@@ -33,3 +33,20 @@ class CandidateRepository(BaseRepository[Candidate]):
         if candidate is not None:
             candidate.is_active = False
             await self.session.flush()
+
+    async def reactivate_by_user_id(self, user_id: int) -> None:
+        """Reactivate the candidate profile linked to user_id.
+
+        No-op unless there is a deactivated profile (get_by_user_id filters to
+        active rows, so it cannot find one to switch back on). Called after a
+        returning candidate confirms reactivation via the email link.
+        """
+        stmt = (
+            select(Candidate)
+            .where(Candidate.user_id == user_id)
+            .where(Candidate.is_active.is_(False))
+        )
+        candidate = (await self.session.execute(stmt)).scalar_one_or_none()
+        if candidate is not None:
+            candidate.is_active = True
+            await self.session.flush()
