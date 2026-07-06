@@ -201,8 +201,10 @@ async def create_user(
     ur.roles = [role.name]
     
     if data.password is None:
-        task_queue.enqueue("send_random_password_email", user.email, password_raw)
-        
+        # Must be awaited — enqueue is a coroutine; a bare call creates it but
+        # never runs it, silently dropping the temp-password email.
+        await task_queue.enqueue("send_random_password_email", user.email, password_raw)
+
     return ur
 
 

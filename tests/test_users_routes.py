@@ -361,12 +361,26 @@ async def test_create_user_rejects_duplicate_email_case_insensitive(
     assert r2.status_code == 409
 
 
-async def test_create_user_rejects_missing_password(
+async def test_create_user_without_password_generates_and_emails_one(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """Omitting the password must return 422, not a 500 from hashing None."""
-    from app.modules.auth.infrastructure.models import Role
+    """Omitting the password generates a secure one, flags a forced change, and
+    emails it to the new user.
+
+    The email is enqueued via an awaited coroutine — a bare (un-awaited) call
+    would silently drop it, so this test also guards that regression.
+    """
+
+    class _RecordingTaskQueue:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def enqueue(self, task_name: str, *args: object) -> None:
+            self.calls.append((task_name, args))
+
     from sqlalchemy import select
+
+    from app.modules.auth.infrastructure.models import Role
 
     admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
     role = (
@@ -375,12 +389,29 @@ async def test_create_user_rejects_missing_password(
         )
     ).scalar_one()
 
+    recorder = _RecordingTaskQueue()
+    app.state.task_queue = recorder
+    email = f"{uuid.uuid4().hex[:10]}@example.com"
+
     response = await client.post(
         USERS_URL,
-        json={"email": f"{uuid.uuid4().hex[:10]}@example.com", "role_id": role.id},
+        json={"email": email, "role_id": role.id},
         headers=_bearer(admin.user_id),
     )
-    assert response.status_code == 422
+    assert response.status_code == 201
+
+    # The temp-password email must have been enqueued (proves the await is present).
+    assert any(
+        name == "send_random_password_email" and args[0] == email
+        for name, args in recorder.calls
+    ), "temp-password email must be enqueued when no password is provided"
+
+    # The account is created with a usable hash and forced to rotate on first login.
+    created = (
+        await session.execute(select(User).where(User.email == email))
+    ).scalar_one()
+    assert created.password_hash is not None
+    assert created.must_change_password is True
 
 
 async def test_patch_deactivation_revokes_refresh_tokens(
