@@ -20,11 +20,11 @@ class CandidateRepository(BaseRepository[Candidate]):
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_by_cedula(self, cedula: str) -> Candidate | None:
-        stmt = (
-            select(Candidate)
-            .where(Candidate.cedula == cedula)
-            .where(Candidate.is_active.is_(True))
-        )
+        # No is_active filter: the uq_candidates_cedula constraint spans every
+        # row, so the duplicate guard must see inactive (closed-account) rows
+        # too — otherwise the insert fails with a raw IntegrityError (500)
+        # instead of a clean DuplicateCandidateError (409).
+        stmt = select(Candidate).where(Candidate.cedula == cedula)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def deactivate_by_user_id(self, user_id: int) -> None:

@@ -106,6 +106,41 @@ async def test_create_candidate_rejects_duplicate_cedula(session: AsyncSession) 
         )
 
 
+async def test_create_candidate_rejects_cedula_from_deactivated_account(
+    session: AsyncSession,
+) -> None:
+    """A cedula on a soft-deleted (inactive) candidate is still taken.
+
+    The DB unique constraint spans every row, active or not, so the duplicate
+    guard must look at inactive rows too. Otherwise the insert blows up with a
+    raw IntegrityError (500) instead of a clean DuplicateCandidateError (409).
+    Regression: surfaced when a returning candidate re-registered under a new
+    account but reused the cedula from a closed one.
+    """
+    service = _service(session)
+    cedula = uuid.uuid4().hex[:10]
+    first = await _make_user(session)
+    second = await _make_user(session)
+    created = await service.create(
+        CandidateCreate(
+            user_id=first.id, first_name="A", last_name="A",
+            doc_type="passport", cedula=cedula,
+        ),
+        ACTOR,
+    )
+    # Close the first account → candidate goes inactive but keeps the cedula.
+    await service.delete(created.id)
+
+    with pytest.raises(DuplicateCandidateError):
+        await service.create(
+            CandidateCreate(
+                user_id=second.id, first_name="B", last_name="B",
+                doc_type="passport", cedula=cedula,
+            ),
+            ACTOR,
+        )
+
+
 async def test_create_candidate_rejects_unknown_file(session: AsyncSession) -> None:
     user = await _make_user(session)
     with pytest.raises(CandidateReferenceError):
