@@ -121,12 +121,16 @@ def _fill_experience_section(doc: Document, experiences: list[dict]) -> None:
     for t in pre_built[1:]:
         body.remove(t._element)
 
-    # Append additional experience tables after the first one
+    # Append additional experience tables after the first one. Two <w:tbl>
+    # elements with no paragraph between them render as a single merged table in
+    # Word, so separate each extra table with an empty paragraph.
     anchor = pre_built[0]._element
     for exp in experiences[1:]:
+        spacer = OxmlElement("w:p")
+        anchor.addnext(spacer)
         new_elem = copy.deepcopy(template_copy)
         _fill_exp_table_elem(new_elem, exp)
-        anchor.addnext(new_elem)
+        spacer.addnext(new_elem)
         anchor = new_elem
 
 
