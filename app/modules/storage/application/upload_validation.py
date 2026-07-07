@@ -16,6 +16,17 @@ import zipfile
 # 10 MiB — comfortably above a real CV/avatar/promo image, well below a DoS payload.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
+# Per-entity caps override the global default. Avatars are downscaled server-side
+# anyway, so a lower ceiling just rejects absurd payloads without hurting UX.
+MAX_BYTES_BY_ENTITY: dict[str, int] = {
+    "avatar": 5 * 1024 * 1024,
+}
+
+
+def max_bytes_for(entity_type: str) -> int:
+    """Return the upload size cap for `entity_type` (falls back to the global)."""
+    return MAX_BYTES_BY_ENTITY.get(entity_type, MAX_UPLOAD_BYTES)
+
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 # entity_type (storage.files vocabulary) → content types it may legitimately hold.
@@ -75,9 +86,10 @@ def validate_upload_bytes(entity_type: str, data: bytes) -> str:
     Raises UploadTooLargeError when the payload is too big, and UploadTypeError
     when the real content type is unknown or disallowed for the entity_type.
     """
-    if len(data) > MAX_UPLOAD_BYTES:
+    limit = max_bytes_for(entity_type)
+    if len(data) > limit:
         raise UploadTooLargeError(
-            f"File exceeds the maximum allowed size of {MAX_UPLOAD_BYTES} bytes"
+            f"File exceeds the maximum allowed size of {limit} bytes"
         )
     detected = detect_mime(data)
     allowed = ALLOWED_BY_ENTITY.get(entity_type, set())

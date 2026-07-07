@@ -16,10 +16,11 @@ from app.modules.storage.application.files_service import (
     FileOwnershipError,
     FileService,
 )
+from app.modules.storage.application.image_processing import resize_avatar
 from app.modules.storage.application.upload_validation import (
-    MAX_UPLOAD_BYTES,
     UploadTooLargeError,
     UploadTypeError,
+    max_bytes_for,
     validate_upload_bytes,
 )
 from app.modules.storage.infrastructure.minio_client import minio_client, upload_file_to_minio
@@ -226,8 +227,8 @@ async def upload_file(
         )
 
     # Read at most one byte past the cap so an oversized body is rejected without
-    # ever materializing the whole payload in memory.
-    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    # ever materializing the whole payload in memory. The cap is per entity_type.
+    data = await file.read(max_bytes_for(entity_type) + 1)
     try:
         detected_mime = validate_upload_bytes(entity_type, data)
     except UploadTooLargeError as exc:
@@ -238,6 +239,17 @@ async def upload_file(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+
+    # Avatars are downscaled to a small JPEG thumbnail before storage — the
+    # original phone-sized image is never kept.
+    if entity_type == "avatar":
+        try:
+            data, detected_mime = resize_avatar(data)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="No se pudo procesar la imagen del avatar.",
+            ) from exc
 
     try:
         stored_key = upload_file_to_minio(

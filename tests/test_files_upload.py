@@ -56,8 +56,14 @@ def _pdf_upload() -> dict:
 
 
 def _png_upload() -> dict:
-    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
-    return {"file": ("avatar.png", png, "image/png")}
+    # A real PNG — avatars are opened and downscaled by Pillow at upload time.
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 400), (100, 150, 200)).save(buf, format="PNG")
+    return {"file": ("avatar.png", buf.getvalue(), "image/png")}
 
 
 async def test_upload_requires_entity_type(
@@ -132,6 +138,25 @@ async def test_upload_rejects_oversized_payload(
         headers=_bearer(user.id),
         files={"file": ("big.pdf", oversized, "application/pdf")},
         data={"entity_type": "cv"},
+    )
+    assert res.status_code == 413
+
+
+async def test_upload_avatar_rejects_over_its_lower_limit(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    # Avatars have a lower cap (5 MiB) than the 10 MiB global. A payload above the
+    # avatar cap is a 413, even though it would fit a CV. Rejected on size before
+    # the image is ever decoded, so a fake PNG body is fine here.
+    from app.modules.storage.application.upload_validation import max_bytes_for
+
+    user = await _make_user(session)
+    oversized = b"\x89PNG\r\n\x1a\n" + b"\x00" * (max_bytes_for("avatar") + 1)
+    res = await client.post(
+        "/api/v1/storage/files/upload",
+        headers=_bearer(user.id),
+        files={"file": ("big.png", oversized, "image/png")},
+        data={"entity_type": "avatar"},
     )
     assert res.status_code == 413
 
