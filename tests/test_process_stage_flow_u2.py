@@ -2,7 +2,7 @@
 
 Tests cover:
 - create() inserts Postulantes (order=1, is_initial=True) in same transaction.
-- create() inserts Contratación (order=2, is_final_positive=True) in same transaction.
+- create() inserts Contratación (reserved final order, is_final_positive=True) in same transaction.
 - Both stages resolve param ids by code ('applicants' and 'offer').
 - Raises ProcessReferenceError when 'applicants' param is missing.
 - Raises ProcessReferenceError when 'offer' param is missing.
@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import CurrentUser
 from app.modules.org.api.processes_schemas import ProcessCreate
 from app.modules.org.application.processes_service import (
+    FINAL_STAGE_ORDER,
     ProcessReferenceError,
     ProcessService,
 )
@@ -104,8 +105,7 @@ async def test_create_process_inserts_postulantes_stage(session: AsyncSession) -
 
 
 async def test_create_process_inserts_contratacion_stage(session: AsyncSession) -> None:
-    """ProcessService.create() must insert a Contratación stage (order=2, is_final_positive=True).
-    """  # noqa: E501 — docstring length is intentional
+    """ProcessService.create() inserts Contratación (reserved final order, is_final_positive=True)."""
     company_id, dept_id = await _seed_company_and_dept(session)
     await _seed_stage_params(session)
 
@@ -116,8 +116,8 @@ async def test_create_process_inserts_contratacion_stage(session: AsyncSession) 
     )
 
     stages = await ProcessStageRepository(session).list_by_process(process.id)
-    contratacion = next((s for s in stages if s.order == 2), None)
-    assert contratacion is not None, "Contratación stage (order=2) must be created"
+    contratacion = next((s for s in stages if s.order == FINAL_STAGE_ORDER), None)
+    assert contratacion is not None, "Contratación stage (reserved final order) must be created"
     assert contratacion.is_final_positive is True, (
         "Contratación stage must have is_final_positive=True"
     )
@@ -140,7 +140,7 @@ async def test_create_process_both_stages_in_same_transaction(session: AsyncSess
 
     stages = await ProcessStageRepository(session).list_by_process(process.id)
     orders = sorted(s.order for s in stages)
-    assert orders == [1, 2], f"Expected orders [1, 2], got {orders}"
+    assert orders == [1, FINAL_STAGE_ORDER], f"Expected orders [1, {FINAL_STAGE_ORDER}], got {orders}"
 
 
 # ---------------------------------------------------------------------------

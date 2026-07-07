@@ -16,6 +16,12 @@ from app.shared.ports import InUseChecker
 from app.shared.repository import BaseRepository
 
 
+# Reserved high order for the final backbone stage (Contratados). Keeping it far
+# above any realistic custom-stage count guarantees it always sorts last and
+# leaves orders 2..N free for the custom stages placed between Postulantes and it.
+FINAL_STAGE_ORDER = 9999
+
+
 class ProcessNotFoundError(Exception):
     pass
 
@@ -37,7 +43,10 @@ class ProcessService:
 
     On create(), two fixed stages are auto-seeded in the same transaction:
     - Postulantes (order=1, is_initial=True)  — param (stage, applicants)
-    - Contratación (order=2, is_final_positive=True) — param (stage, offer)
+    - Contratados (order=FINAL_STAGE_ORDER, is_final_positive=True) — param (stage, offer)
+
+    The final stage takes a reserved high order so it always sorts last and the
+    orders in between stay free for the custom middle stages.
 
     Both params must already exist in org.parameters (seeded via migration
     b8c9d0e1f2a3). If either is missing ProcessReferenceError is raised.
@@ -127,7 +136,7 @@ class ProcessService:
         return process
 
     async def _seed_fixed_stages(self, process_id: int, actor: CurrentUser) -> None:
-        """Insert Postulantes (order=1) and Contratación (order=2) in the same transaction."""
+        """Insert Postulantes (order=1) and Contratados (order=FINAL_STAGE_ORDER)."""
         applicants_param = await self.parameter_repository.get_by_type_and_code(  # type: ignore[union-attr]
             "stage", "applicants"
         )
@@ -161,7 +170,7 @@ class ProcessService:
             ProcessStage(
                 process_id=process_id,
                 stage_id=offer_param.id,
-                order=2,
+                order=FINAL_STAGE_ORDER,
                 is_initial=False,
                 is_final_positive=True,
                 created_by=actor.user_id,
