@@ -310,3 +310,83 @@ async def test_vacancy_stages_returns_ordered_stages(session: AsyncSession) -> N
     # Confirm no client identity is exposed (StageRow has no client fields)
     assert not hasattr(stages[0], "client_company")
     assert not hasattr(stages[0], "contact")
+
+
+async def _vacancy_with_reserved_final_stage(session: AsyncSession) -> Vacancy:
+    """Vacancy whose process has Postulantes (order=1) + Contratados at the
+    reserved sort order FINAL_STAGE_ORDER (9999), mirroring what the backend
+    seeds so the endpoints must translate the sort key into a display position.
+    """
+    initial = await BaseRepository(session, Parameter).add(
+        Parameter(type="stage", code=uuid.uuid4().hex[:8], name="Postulantes")
+    )
+    final = await BaseRepository(session, Parameter).add(
+        Parameter(type="stage", code=uuid.uuid4().hex[:8], name="Contratados")
+    )
+    company = await BaseRepository(session, ClientCompany).add(ClientCompany(name="ReservedCo"))
+    contact = await BaseRepository(session, Contact).add(
+        Contact(client_company_id=company.id, first_name="R", last_name="C", email="r@c.co")
+    )
+    dept = await BaseRepository(session, Department).add(Department(name="Sales"))
+    process = await BaseRepository(session, Process).add(
+        Process(
+            client_company_id=company.id,
+            department_id=dept.id,
+            name=f"P{uuid.uuid4().hex[:6]}",
+        )
+    )
+    await BaseRepository(session, ProcessStage).add(
+        ProcessStage(process_id=process.id, stage_id=initial.id, order=1, is_initial=True)
+    )
+    await BaseRepository(session, ProcessStage).add(
+        ProcessStage(process_id=process.id, stage_id=final.id, order=9999, is_final_positive=True)
+    )
+    return await BaseRepository(session, Vacancy).add(
+        Vacancy(
+            vacancy_name_id=initial.id,
+            client_company_id=company.id,
+            contact_id=contact.id,
+            department_id=dept.id,
+            process_id=process.id,
+            career_id=initial.id,
+            city_id=initial.id,
+            work_mode_id=initial.id,
+            resource_level_id=initial.id,
+            status_id=initial.id,
+        )
+    )
+
+
+async def test_pipeline_endpoint_exposes_sequential_display_order_not_reserved_9999(
+    session: AsyncSession,
+) -> None:
+    """The reserved 9999 sort order must never reach the UI: the pipeline
+    endpoint exposes a sequential 1..N position, and the virtual Rechazados
+    column stays last.
+    """
+    from app.modules.recruitment.api.vacancies_routes import get_vacancy_pipeline
+
+    vacancy = await _vacancy_with_reserved_final_stage(session)
+    result = await get_vacancy_pipeline(vacancy.id, session)
+
+    assert [s.name for s in result.stages] == ["Postulantes", "Contratados", "Rechazados"]
+    assert [s.order for s in result.stages] == [1, 2, 3]
+    # Contratados must show its sequential position, not the reserved sort key.
+    contratados = next(s for s in result.stages if s.name == "Contratados")
+    assert contratados.order == 2
+    assert contratados.type == "final"
+
+
+async def test_vacancy_stages_endpoint_exposes_sequential_display_order(
+    session: AsyncSession,
+) -> None:
+    """The candidate-portal /stages endpoint must also translate the reserved
+    9999 order into a sequential position so the progress badge reads 2, not 9999.
+    """
+    from app.modules.recruitment.api.vacancies_routes import get_vacancy_stages
+
+    vacancy = await _vacancy_with_reserved_final_stage(session)
+    items = await get_vacancy_stages(vacancy.id, session)
+
+    assert [i.order for i in items] == [1, 2]
+    assert items[1].name == "Contratados"

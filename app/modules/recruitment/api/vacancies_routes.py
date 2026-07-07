@@ -270,15 +270,18 @@ async def get_vacancy_stages(vacancy_id: int, session: SessionDep) -> list[Vacan
     Omits client and contact data — safe for candidate-portal tokens.
     """
     data = await PipelineRepository(session).get_pipeline(vacancy_id)
+    # Expose a sequential 1..N display position, not the stored sort key: the
+    # final stage is seeded at a reserved high order (9999) so it always sorts
+    # last, and that internal value must never surface in the candidate portal.
     return [
         VacancyStageItem(
             id=s.id,
             name=s.name,
-            order=s.order,
+            order=position,
             is_final_positive=s.is_final_positive,
             is_initial=s.is_initial,
         )
-        for s in data.stages
+        for position, s in enumerate(data.stages, start=1)
     ]
 
 
@@ -368,15 +371,18 @@ async def get_vacancy_pipeline(vacancy_id: int, session: SessionDep) -> Pipeline
         "bg-accent-400", "bg-primary-500",
     ]
 
+    # Expose a sequential 1..N display position instead of the stored sort key:
+    # the final stage is seeded at a reserved high order (9999) to always sort
+    # last, and that internal value must never reach the Kanban badge.
     stages = [
         PipelineStageSchema(
             id=str(s.id),
             vacancyId=str(vacancy_id),
             name=s.name,
-            order=s.order,
+            order=position,
             type="final" if s.is_final_positive else "normal",
         )
-        for s in data.stages
+        for position, s in enumerate(data.stages, start=1)
     ]
 
     # Virtual "Rechazado" stage — always appended last so the board always shows it.
