@@ -64,6 +64,14 @@ PERMISSION_CATALOG: tuple[PermissionSpec, ...] = (
     *_specs("auth", "menu_items", "menu items", _CRUD),
     # recruitment bounded context
     *_specs("recruitment", "vacancies", "vacancies", _CRUD),
+    # Narrow candidate-facing read: stage names only (no client/contact/PII). Split
+    # out from the coarse vacancies.read so the candidate role isn't handed a staff
+    # permission that also unlocks pipeline/documents/client info.
+    PermissionSpec(
+        code="recruitment.vacancies.read_stages",
+        name="View vacancy stages",
+        module="recruitment",
+    ),
     *_specs("recruitment", "candidates", "candidates", _CRUD),
     *_specs("recruitment", "applications", "applications", _CRUD),
     *_specs("recruitment", "application_documents", "application documents", _CRUD),

@@ -207,6 +207,23 @@ def _prepare_contents(pdf_bytes: bytes, vacancy: Vacancy) -> list[Any]:
     return _build_image_contents(images, vacancy) if images else []
 
 
+def _clamp_score(raw: Any) -> float:
+    """Coerce the model's score to a float in [0, 100].
+
+    The score comes from the LLM reading candidate-controlled CV text; even with the
+    _INJECTION_GUARD fencing, a crafted CV could push it out of range or to a
+    non-number. Clamping server-side means a poisoned CV can never store a >100 (or
+    negative) match score that would float the candidate to the top of the board.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if value != value:  # NaN
+        return 0.0
+    return max(0.0, min(100.0, value))
+
+
 async def analyze_application(application_id: int, force: bool = False) -> None:
     """Entry point for the background task.
 
@@ -282,7 +299,7 @@ async def analyze_application(application_id: int, force: bool = False) -> None:
         return
 
     # ── Phase 3: write result to DB — fresh session ──────────────────────────
-    score = float(result.get("score", 0))
+    score = _clamp_score(result.get("score", 0))
     full_summary = json.dumps(result, ensure_ascii=False)
 
     async with async_session_factory() as session:

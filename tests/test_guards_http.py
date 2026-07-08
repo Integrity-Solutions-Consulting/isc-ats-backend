@@ -23,8 +23,10 @@ GUARDED_URL = "/api/v1/org/departments"
 
 # Staff-only endpoint (requires auth.roles.create — candidates must NOT access it).
 ROLES_CREATE_URL = "/api/v1/auth/roles"
-# Endpoint a bootstrapped candidate IS allowed to call.
-VACANCIES_LIST_URL = "/api/v1/recruitment/vacancies"
+# Endpoint a bootstrapped candidate IS allowed to call (stage names only). The
+# vacancy list itself is staff-only — it exposes client info and non-public
+# vacancies, so a candidate token is rejected by forbid_candidate_portal.
+VACANCY_STAGES_URL = "/api/v1/recruitment/vacancies/1/stages"
 
 
 @pytest.fixture
@@ -106,11 +108,13 @@ async def test_candidate_cannot_access_staff_only_endpoint(
 async def test_candidate_can_access_allowed_endpoint(
     client: AsyncClient, session: AsyncSession
 ) -> None:
-    """A candidate with the bootstrapped candidate role gets 200 on GET /recruitment/vacancies."""
-    # Bootstrap gives the candidate role recruitment.vacancies.read.
-    admin = await bootstrap_admin(
-        session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret"
-    )
+    """A candidate with the bootstrapped candidate role gets 200 on /vacancies/{id}/stages.
+
+    That is the one vacancy endpoint the candidate portal legitimately needs; the
+    vacancy list and pipeline are staff-only (forbid_candidate_portal).
+    """
+    # Bootstrap gives the candidate role recruitment.vacancies.read_stages.
+    await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
 
     # Create a candidate-portal user and explicitly assign the candidate role.
     from sqlalchemy import select
@@ -129,9 +133,9 @@ async def test_candidate_can_access_allowed_endpoint(
     await assign_role_to_user(session, cand_user.id, cand_role.id)
 
     response = await client.get(
-        VACANCIES_LIST_URL,
+        VACANCY_STAGES_URL,
         headers=_bearer(cand_user.id, portal="candidate"),
     )
 
     assert response.status_code == 200
-    assert "items" in response.json()
+    assert isinstance(response.json(), list)

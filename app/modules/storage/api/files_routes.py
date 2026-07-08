@@ -240,6 +240,20 @@ async def upload_file(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
 
+    # Per-account CV quota: a candidate can't exhaust storage/RAM with many or large
+    # CVs. Checked before the object-storage write so a rejected upload costs nothing.
+    if entity_type == "cv" and is_candidate_portal(current_user):
+        if await service.cv_quota_exceeded(
+            current_user.user_id,
+            len(data),
+            max_count=settings.cv_max_active_per_user,
+            max_total_bytes=settings.cv_max_total_bytes_per_user,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Alcanzaste el límite de CVs. Eliminá alguno antes de subir otro.",
+            )
+
     # Avatars are downscaled to a small JPEG thumbnail before storage — the
     # original phone-sized image is never kept.
     if entity_type == "avatar":

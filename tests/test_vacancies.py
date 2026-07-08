@@ -367,7 +367,7 @@ async def test_pipeline_endpoint_exposes_sequential_display_order_not_reserved_9
     from app.modules.recruitment.api.vacancies_routes import get_vacancy_pipeline
 
     vacancy = await _vacancy_with_reserved_final_stage(session)
-    result = await get_vacancy_pipeline(vacancy.id, session)
+    result = await get_vacancy_pipeline(vacancy.id, session, ACTOR)
 
     assert [s.name for s in result.stages] == ["Postulantes", "Contratados", "Rechazados"]
     assert [s.order for s in result.stages] == [1, 2, 3]

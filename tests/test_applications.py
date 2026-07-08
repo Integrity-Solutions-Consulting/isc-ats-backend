@@ -50,6 +50,7 @@ from app.shared.pagination import PageParams
 from app.shared.repository import BaseRepository
 
 ACTOR = CurrentUser(user_id=1, ip="127.0.0.1")
+CANDIDATE_ACTOR = CurrentUser(user_id=1, ip="127.0.0.1", portal="candidate")
 
 
 def _service(session: AsyncSession) -> ApplicationService:
@@ -346,3 +347,119 @@ async def test_notes_list_filters_by_application(session: AsyncSession) -> None:
     assert f_total == 2
     assert all(n.application_id == application.id for n in filtered)
     assert n_total == 0
+
+
+# ── Publication guard: candidate portal may only apply to active vacancies ─────
+
+async def _active_status_param(session: AsyncSession) -> Parameter:
+    """The seeded vacancy_status 'active' param, or a freshly created one."""
+    repo = ParameterRepository(session)
+    existing = await repo.get_by_type_and_code("vacancy_status", "active")
+    if existing is not None:
+        return existing
+    return await BaseRepository(session, Parameter).add(
+        Parameter(type="vacancy_status", code="active", name="Activa")
+    )
+
+
+async def test_candidate_cannot_apply_to_non_active_vacancy(session: AsyncSession) -> None:
+    """A candidate-portal caller may only apply to PUBLISHED (status=active) vacancies.
+
+    _build_graph's vacancy carries a non-active status code, so the candidate is
+    rejected with the SAME not-found error used for a missing vacancy — they must
+    not be able to tell draft/paused/closed vacancies apart by response shape.
+    """
+    vacancy, candidate, param = await _build_graph(session)
+    with pytest.raises(ApplicationReferenceError):
+        await _service(session).create(
+            _payload(vacancy, candidate, param), CANDIDATE_ACTOR
+        )
+
+
+async def test_candidate_can_apply_to_active_vacancy(session: AsyncSession) -> None:
+    vacancy, candidate, param = await _build_graph(session)
+    vacancy.status_id = (await _active_status_param(session)).id
+    await session.flush()
+
+    application = await _service(session).create(
+        _payload(vacancy, candidate, param), CANDIDATE_ACTOR
+    )
+    assert application.id is not None
+
+
+async def test_staff_can_apply_to_non_active_vacancy(session: AsyncSession) -> None:
+    """Staff are exempt from the publication gate — they manually place candidates
+    into draft/paused vacancies."""
+    vacancy, candidate, param = await _build_graph(session)
+    application = await _service(session).create(
+        _payload(vacancy, candidate, param), ACTOR
+    )
+    assert application.id is not None
+
+
+# ── Mass-assignment: a candidate can't self-assign the application status ──────
+
+async def test_candidate_create_forces_active_status(session: AsyncSession) -> None:
+    """A candidate-supplied status_id (e.g. 'hired') must be ignored — the server
+    forces the initial 'active' status, the same way current_stage_id is overridden.
+    """
+    vacancy, candidate, _param = await _build_graph(session)
+    vacancy.status_id = (await _active_status_param(session)).id  # publishable
+    await session.flush()
+
+    repo = ParameterRepository(session)
+    hired = await repo.get_by_type_and_code("application_status", "hired")
+    active = await repo.get_by_type_and_code("application_status", "active")
+    assert hired is not None and active is not None, "application_status seed required"
+
+    application = await _service(session).create(
+        ApplicationCreate(
+            vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=hired.id
+        ),
+        CANDIDATE_ACTOR,
+    )
+    assert application.status_id == active.id  # forced, NOT the client's 'hired'
+
+
+async def test_staff_create_keeps_supplied_status(session: AsyncSession) -> None:
+    """Staff are exempt — a status they set on create is respected."""
+    vacancy, candidate, _param = await _build_graph(session)
+    hired = await ParameterRepository(session).get_by_type_and_code(
+        "application_status", "hired"
+    )
+    assert hired is not None
+
+    application = await _service(session).create(
+        ApplicationCreate(
+            vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=hired.id
+        ),
+        ACTOR,
+    )
+    assert application.status_id == hired.id
+
+
+async def test_candidate_create_raises_when_active_param_missing(session: AsyncSession) -> None:
+    """Fix 1 regression: when application_status 'active' param resolves to None,
+    a candidate-portal create must FAIL CLOSED with ApplicationReferenceError —
+    never silently pass the caller-supplied status_id through."""
+    vacancy, candidate, _param = await _build_graph(session)
+    # Use an active vacancy so the publication guard passes first.
+    vacancy.status_id = (await _active_status_param(session)).id
+    await session.flush()
+
+    # Deactivate the seeded application_status 'active' param so it resolves to None.
+    repo = ParameterRepository(session)
+    active_param = await repo.get_by_type_and_code("application_status", "active")
+    assert active_param is not None, "application_status seed required"
+    active_param.is_active = False
+    await session.flush()
+
+    with pytest.raises(ApplicationReferenceError):
+        await _service(session).create(
+            ApplicationCreate(
+                vacancy_id=vacancy.id,
+                candidate_id=candidate.id,
+                status_id=_param.id,
+            ),
+            CANDIDATE_ACTOR,
+        )

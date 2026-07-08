@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.modules.auth.application.disposable_email import is_disposable_email
 from app.shared.validators import password_policy_error
 
 
@@ -7,6 +8,13 @@ def _enforce_password_policy(value: str) -> str:
     error = password_policy_error(value)
     if error:
         raise ValueError(error)
+    return value
+
+
+def _reject_disposable_email(value: str) -> str:
+    # Registration is the abuse funnel; refuse throwaway domains (yopmail et al.).
+    if is_disposable_email(value):
+        raise ValueError("Los correos temporales o desechables no están permitidos.")
     return value
 
 
@@ -39,6 +47,7 @@ class RegisterRequest(BaseModel):
     password: str = Field(max_length=72)
 
     _validate_password = field_validator("password")(_enforce_password_policy)
+    _validate_email = field_validator("email")(_reject_disposable_email)
 
 
 class ChangePasswordRequest(BaseModel):

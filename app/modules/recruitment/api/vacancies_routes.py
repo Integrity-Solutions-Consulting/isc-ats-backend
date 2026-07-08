@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import CurrentUserDep, SessionDep
-from app.modules.auth.api.authorization import require_permission
+from app.modules.auth.api.authorization import require_any_permission, require_permission
 from app.modules.org.infrastructure.models import (
     ClientCompany,
     Contact,
@@ -45,6 +45,7 @@ from app.modules.recruitment.infrastructure.pipeline_repository import (
 from app.modules.recruitment.infrastructure.vacancies_repository import (
     VacanciesExpandedRepository,
 )
+from app.shared.ownership import forbid_candidate_portal
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
@@ -149,6 +150,7 @@ ServiceDep = Annotated[VacancyService, Depends(get_service)]
 )
 async def list_vacancies_expanded(
     session: SessionDep,
+    current_user: CurrentUserDep,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 50,
     client_company_id: Annotated[int | None, Query()] = None,
@@ -156,6 +158,7 @@ async def list_vacancies_expanded(
     department_id: Annotated[int | None, Query()] = None,
     include_inactive: Annotated[bool, Query()] = False,
 ) -> Page[VacancyListItem]:
+    forbid_candidate_portal(current_user)
     repo = VacanciesExpandedRepository(session)
     params = PageParams(page=page, size=size)
     items, total = await repo.list_expanded(
@@ -177,12 +180,14 @@ async def list_vacancies_expanded(
 )
 async def list_vacancies(
     service: ServiceDep,
+    current_user: CurrentUserDep,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
     client_company_id: Annotated[int | None, Query()] = None,
     status_id: Annotated[int | None, Query()] = None,
     department_id: Annotated[int | None, Query()] = None,
 ) -> Page[VacancyRead]:
+    forbid_candidate_portal(current_user)
     params = PageParams(page=page, size=size)
     items, total = await service.list(
         params,
@@ -198,7 +203,10 @@ async def list_vacancies(
     response_model=VacancyRead,
     dependencies=[Depends(require_permission("recruitment.vacancies.read"))],
 )
-async def get_vacancy(vacancy_id: int, service: ServiceDep) -> VacancyRead:
+async def get_vacancy(
+    vacancy_id: int, service: ServiceDep, current_user: CurrentUserDep
+) -> VacancyRead:
+    forbid_candidate_portal(current_user)
     try:
         return VacancyRead.model_validate(await service.get(vacancy_id))
     except VacancyNotFoundError as exc:
@@ -260,7 +268,14 @@ async def delete_vacancy(vacancy_id: int, service: ServiceDep) -> None:
 @router.get(
     "/{vacancy_id}/stages",
     response_model=list[VacancyStageItem],
-    dependencies=[Depends(require_permission("recruitment.vacancies.read"))],
+    dependencies=[
+        Depends(
+            require_any_permission(
+                "recruitment.vacancies.read",
+                "recruitment.vacancies.read_stages",
+            )
+        )
+    ],
     summary="List process stages for a vacancy — accessible by candidates",
 )
 async def get_vacancy_stages(vacancy_id: int, session: SessionDep) -> list[VacancyStageItem]:
@@ -289,7 +304,10 @@ async def get_vacancy_stages(vacancy_id: int, session: SessionDep) -> list[Vacan
     "/{vacancy_id}/generate-poster",
     dependencies=[Depends(require_permission("recruitment.vacancies.read"))],
 )
-async def generate_poster(vacancy_id: int) -> StreamingResponse:
+async def generate_poster(
+    vacancy_id: int, current_user: CurrentUserDep
+) -> StreamingResponse:
+    forbid_candidate_portal(current_user)
     try:
         image_bytes = await generate_vacancy_poster(vacancy_id)
     except ValueError as exc:
@@ -308,11 +326,12 @@ async def generate_poster(vacancy_id: int) -> StreamingResponse:
     summary="List generated Word profile documents for all candidates in a vacancy",
 )
 async def get_vacancy_documents(
-    vacancy_id: int, session: SessionDep
+    vacancy_id: int, session: SessionDep, current_user: CurrentUserDep
 ) -> list[VacancyDocumentItem]:
     """Returns all application_documents records linked to this vacancy's applications,
     enriched with candidate name, stage name at generation, and author display name.
     """
+    forbid_candidate_portal(current_user)
     rows = await PipelineRepository(session).get_vacancy_documents(vacancy_id)
 
     avatar_colors = [
@@ -362,7 +381,10 @@ async def get_vacancy_documents(
     response_model=PipelineSchema,
     dependencies=[Depends(require_permission("recruitment.vacancies.read"))],
 )
-async def get_vacancy_pipeline(vacancy_id: int, session: SessionDep) -> PipelineSchema:
+async def get_vacancy_pipeline(
+    vacancy_id: int, session: SessionDep, current_user: CurrentUserDep
+) -> PipelineSchema:
+    forbid_candidate_portal(current_user)
     data = await PipelineRepository(session).get_pipeline(vacancy_id)
 
     avatar_colors = [

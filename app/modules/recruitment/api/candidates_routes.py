@@ -157,15 +157,15 @@ async def cv_prefill(
     """
     from app.modules.ai.application.cv_prefill_service import prefill_from_bytes
     from app.modules.storage.application.upload_validation import (
-        MAX_UPLOAD_BYTES,
         UploadTooLargeError,
         UploadTypeError,
+        max_bytes_for,
         validate_upload_bytes,
     )
 
     # Cap the read (memory) and confirm it is really a PDF before spending a
     # Gemini call — this endpoint is authenticated but otherwise uncosted.
-    pdf_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+    pdf_bytes = await file.read(max_bytes_for("cv") + 1)
     try:
         validate_upload_bytes("cv", pdf_bytes)
     except UploadTooLargeError as exc:
@@ -211,6 +211,14 @@ async def create_candidate(
 ) -> CandidateRead:
     # A candidate may only create their own profile (user_id == token subject).
     require_owner(current_user, data.user_id)
+    # The cédula/document is optional on the schema (staff manual entry and the TMR
+    # integration may fill it later), but a candidate registering themselves MUST
+    # provide one — the frontend enforces it and a script must not be able to skip it.
+    if is_candidate_portal(current_user) and not (data.cedula and data.cedula.strip()):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "La cédula es requerida para completar tu registro.",
+        )
     try:
         created = await service.create(data, current_user)
     except CandidateReferenceError as exc:

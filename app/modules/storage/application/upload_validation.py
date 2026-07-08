@@ -16,9 +16,12 @@ import zipfile
 # 10 MiB — comfortably above a real CV/avatar/promo image, well below a DoS payload.
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
-# Per-entity caps override the global default. Avatars are downscaled server-side
-# anyway, so a lower ceiling just rejects absurd payloads without hurting UX.
+# Per-entity caps override the global default. CVs and avatars are capped below
+# the 10 MiB global: a real CV/avatar is well under 5 MiB, so the lower ceiling
+# shrinks the per-request RAM and per-file storage an attacker can force, without
+# hurting legitimate uploads.
 MAX_BYTES_BY_ENTITY: dict[str, int] = {
+    "cv": 5 * 1024 * 1024,
     "avatar": 5 * 1024 * 1024,
 }
 

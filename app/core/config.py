@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     minio_bucket: str = "candidates-cvs"
     # TLS for MinIO traffic — False keeps local docker-compose working; enable in production.
     minio_secure: bool = False
+    # Per-account CV upload quota — bounds the storage/RAM a single candidate can
+    # consume, since per-IP rate limits are defeated by IP rotation. Candidate-portal
+    # CV uploads are rejected past either ceiling (count or total bytes).
+    cv_max_active_per_user: int = 10
+    cv_max_total_bytes_per_user: int = 50 * 1024 * 1024
 
     # Security
     jwt_secret_key: str = _DEFAULT_JWT_SECRET

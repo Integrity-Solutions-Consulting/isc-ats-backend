@@ -47,3 +47,30 @@ def require_permission(
         return current_user
 
     return checker
+
+
+def require_any_permission(
+    *codes: str,
+) -> Callable[[set[str], CurrentUser], Awaitable[CurrentUser]]:
+    """Build a route guard that passes when the user holds ANY of `codes`.
+
+    Use when one endpoint is legitimately reachable by roles holding different
+    least-privilege codes — e.g. staff via a broad `recruitment.vacancies.read`
+    and the candidate portal via the narrow `recruitment.vacancies.read_stages`.
+    Raises 403 when none of the codes are present.
+    """
+    if not codes:
+        raise ValueError("require_any_permission requires at least one permission code")
+    required = frozenset(codes)
+
+    async def checker(
+        user_codes: PermissionCodesDep, current_user: CurrentUserDep
+    ) -> CurrentUser:
+        if required.isdisjoint(user_codes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Missing any of required permissions: {', '.join(sorted(required))}",
+            )
+        return current_user
+
+    return checker

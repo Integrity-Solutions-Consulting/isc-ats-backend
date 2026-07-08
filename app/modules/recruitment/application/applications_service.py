@@ -13,6 +13,7 @@ from app.modules.recruitment.infrastructure.applications_repository import (
 )
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.recruitment.infrastructure.models import Vacancy
+from app.shared.ownership import is_candidate_portal
 from app.shared.pagination import PageParams
 from app.shared.repository import BaseRepository
 
@@ -80,10 +81,27 @@ class ApplicationService:
         vacancy = await self.vacancies.get(data.vacancy_id)
         if vacancy is None:
             raise ApplicationReferenceError(f"vacancy_id={data.vacancy_id} not found")
+        # Candidate-portal callers may only apply to PUBLISHED vacancies: is_active
+        # (already enforced by vacancies.get) AND status code == "active", the same
+        # definition the public endpoints use. Raise the not-found error rather than
+        # a distinct one so a candidate can't enumerate draft/paused/closed vacancy
+        # ids by response shape. Staff are exempt — they place candidates manually.
+        if is_candidate_portal(actor):
+            vacancy_status = await self.parameters.get(vacancy.status_id)
+            if (
+                vacancy_status is None
+                or vacancy_status.type != "vacancy_status"
+                or vacancy_status.code != "active"
+            ):
+                raise ApplicationReferenceError(f"vacancy_id={data.vacancy_id} not found")
         await self._assert(self.candidates, data.candidate_id, "candidate_id")
         await self._validate_optional(data.model_dump())
 
         first_stage_id = await self._first_stage_id(vacancy.process_id)
+        # Candidate-portal callers may not choose their own application status; force
+        # the initial "active" so a client can't self-assign "hired" (mass-assignment
+        # defense-in-depth — current_stage_id is likewise server-controlled).
+        forced_status_id = await self._candidate_active_status_id(actor)
 
         existing = await self.repository.get_by_vacancy_and_candidate(
             data.vacancy_id, data.candidate_id
@@ -97,6 +115,8 @@ class ApplicationService:
             changes = data.model_dump()
             changes["is_active"] = True
             changes["current_stage_id"] = first_stage_id
+            if forced_status_id is not None:
+                changes["status_id"] = forced_status_id
             # Resurrecting a withdrawn application must start clean: clear the
             # rejection stage marker and the AI-computed match fields left over
             # from the previous lifecycle, and reset the sub-status to the initial
@@ -111,6 +131,8 @@ class ApplicationService:
 
         application_data = data.model_dump()
         application_data["current_stage_id"] = first_stage_id
+        if forced_status_id is not None:
+            application_data["status_id"] = forced_status_id
         application = Application(
             **application_data,
             created_by=actor.user_id,
@@ -140,6 +162,26 @@ class ApplicationService:
         )
         session = self.process_stages.session
         return (await session.execute(stmt)).scalar_one_or_none()
+
+    async def _candidate_active_status_id(self, actor: CurrentUser) -> int | None:
+        """The 'active' application_status id for candidate-portal callers, else None.
+
+        Used to force the status of candidate-created applications so a client-
+        supplied status_id (e.g. 'hired') is never trusted. Returns None for staff
+        (their supplied status is respected). For a candidate-portal caller it raises
+        ApplicationReferenceError when the catalog lacks the 'active' param — the
+        control fails CLOSED rather than silently honoring the client's status_id.
+        """
+        if not is_candidate_portal(actor):
+            return None
+        active = await self.parameters.get_by_type_and_code(
+            "application_status", "active"
+        )
+        if active is None:
+            raise ApplicationReferenceError(
+                "application_status 'active' parameter missing"
+            )
+        return active.id
 
     async def update(
         self, application_id: int, data: ApplicationUpdate, actor: CurrentUser

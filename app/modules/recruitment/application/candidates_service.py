@@ -18,6 +18,7 @@ from app.modules.recruitment.infrastructure.candidates_repository import (
     CandidateRepository,
 )
 from app.modules.storage.infrastructure.models import File
+from app.shared.ownership import is_candidate_portal
 from app.shared.pagination import PageParams
 from app.shared.repository import BaseRepository
 
@@ -79,7 +80,7 @@ class CandidateService:
             )
         if data.cedula and await self.repository.get_by_cedula(data.cedula) is not None:
             raise DuplicateCandidateError(f"Cedula {data.cedula} already registered")
-        await self._validate_optional_refs(data.model_dump())
+        await self._validate_optional_refs(data.model_dump(), actor)
 
         candidate = Candidate(
             **data.model_dump(),
@@ -97,7 +98,7 @@ class CandidateService:
         if new_cedula and new_cedula != candidate.cedula:
             if await self.repository.get_by_cedula(new_cedula) is not None:
                 raise DuplicateCandidateError(f"Cedula {new_cedula} already registered")
-        await self._validate_optional_refs(changes)
+        await self._validate_optional_refs(changes, actor)
         changes["updated_by"] = actor.user_id
         changes["ip_updated"] = actor.ip
         return await self.repository.update(candidate, changes)
@@ -106,11 +107,13 @@ class CandidateService:
         candidate = await self.get(candidate_id)
         await self.repository.soft_delete(candidate)
 
-    async def _validate_optional_refs(self, values: dict[str, Any]) -> None:
+    async def _validate_optional_refs(
+        self, values: dict[str, Any], actor: CurrentUser
+    ) -> None:
         for field in ("city_id", "education_level_id", "career_id", "title_id", "university_id"):
             await self._assert(self.parameters, values, field)
         for field in ("avatar_file_id", "cv_file_id"):
-            await self._assert(self.files, values, field)
+            await self._assert_owned_file(values, field, actor)
 
     async def _assert(
         self, repo: BaseRepository[Any], values: dict[str, Any], field: str
@@ -118,3 +121,24 @@ class CandidateService:
         entity_id = values.get(field)
         if entity_id is not None and await repo.get(entity_id) is None:
             raise CandidateReferenceError(f"{field}={entity_id} not found")
+
+    async def _assert_owned_file(
+        self, values: dict[str, Any], field: str, actor: CurrentUser
+    ) -> None:
+        """Validate a file reference exists AND, for a candidate-portal caller, that
+        the caller uploaded it.
+
+        A candidate linking another user's file would have the CV-parse pipeline copy
+        that file's PII into the attacker's own profile, bypassing the download
+        owner-guard. An unowned file is reported as not-found (the same error as a
+        missing id) so ownership can't be probed by the response. Staff are exempt —
+        they attach files across candidates during manual entry.
+        """
+        file_id = values.get(field)
+        if file_id is None:
+            return
+        file = await self.files.get(file_id)
+        if file is None:
+            raise CandidateReferenceError(f"{field}={file_id} not found")
+        if is_candidate_portal(actor) and file.created_by != actor.user_id:
+            raise CandidateReferenceError(f"{field}={file_id} not found")

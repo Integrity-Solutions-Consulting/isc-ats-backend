@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.core.dependencies import CurrentUser
@@ -49,6 +49,31 @@ class FileService:
         if f is None:
             raise FileNotFoundError(f"File {file_id} not found")
         return f
+
+    async def cv_quota_exceeded(
+        self,
+        user_id: int,
+        new_bytes: int,
+        *,
+        max_count: int,
+        max_total_bytes: int,
+    ) -> bool:
+        """True when one more CV of `new_bytes` would breach the caller's quota.
+
+        Counts only the user's own ACTIVE CV files and bounds both their number and
+        their total size, so a candidate can't exhaust storage by uploading many
+        large PDFs — a defense per-IP rate limiting can't provide against IP rotation.
+        """
+        stmt = select(
+            func.count(File.id),
+            func.coalesce(func.sum(File.size_bytes), 0),
+        ).where(
+            File.entity_type == "cv",
+            File.created_by == user_id,
+            File.is_active.is_(True),
+        )
+        count, total = (await self.repository.session.execute(stmt)).one()
+        return (count + 1) > max_count or (int(total) + new_bytes) > max_total_bytes
 
     async def create(
         self, data: FileCreate, actor: CurrentUser, *, trusted: bool = False

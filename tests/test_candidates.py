@@ -297,3 +297,107 @@ async def test_candidates_expanded_includes_university_and_address(
     assert expanded is not None
     assert expanded.university == univ.name
     assert expanded.home_address == "Calle 10 y Av. 9"
+
+
+# ── File-link IDOR: a candidate may only reference files they uploaded ─────────
+
+async def _make_file(
+    session: AsyncSession, owner_id: int, entity_type: str = "cv"
+) -> File:
+    return await BaseRepository(session, File).add(
+        File(
+            original_name="x.pdf",
+            stored_key=uuid.uuid4().hex,
+            bucket="candidates-cvs",
+            mime_type="application/pdf",
+            size_bytes=1000,
+            is_public=False,
+            entity_type=entity_type,
+            created_by=owner_id,
+        )
+    )
+
+
+def _candidate_actor(user_id: int) -> CurrentUser:
+    return CurrentUser(user_id=user_id, ip="127.0.0.1", portal="candidate")
+
+
+async def test_candidate_cannot_link_another_users_cv_file(
+    session: AsyncSession,
+) -> None:
+    victim = await _make_user(session)
+    attacker = await _make_user(session)
+    victim_file = await _make_file(session, victim.id, "cv")
+
+    with pytest.raises(CandidateReferenceError):
+        await _service(session).create(
+            CandidateCreate(
+                user_id=attacker.id, first_name="A", last_name="T",
+                cv_file_id=victim_file.id,
+            ),
+            _candidate_actor(attacker.id),
+        )
+
+
+async def test_candidate_cannot_link_another_users_file_on_update(
+    session: AsyncSession,
+) -> None:
+    """The reported exploit path: the candidate profile PATCH forwards cv_file_id raw."""
+    victim = await _make_user(session)
+    attacker = await _make_user(session)
+    victim_file = await _make_file(session, victim.id, "cv")
+    service = _service(session)
+    candidate = await service.create(
+        CandidateCreate(user_id=attacker.id, first_name="A", last_name="T"),
+        _candidate_actor(attacker.id),
+    )
+
+    with pytest.raises(CandidateReferenceError):
+        await service.update(
+            candidate.id,
+            CandidateUpdate(cv_file_id=victim_file.id),
+            _candidate_actor(attacker.id),
+        )
+
+
+async def test_candidate_cannot_link_another_users_avatar_file(
+    session: AsyncSession,
+) -> None:
+    victim = await _make_user(session)
+    attacker = await _make_user(session)
+    victim_avatar = await _make_file(session, victim.id, "avatar")
+
+    with pytest.raises(CandidateReferenceError):
+        await _service(session).create(
+            CandidateCreate(
+                user_id=attacker.id, first_name="A", last_name="T",
+                avatar_file_id=victim_avatar.id,
+            ),
+            _candidate_actor(attacker.id),
+        )
+
+
+async def test_candidate_can_link_own_cv_file(session: AsyncSession) -> None:
+    owner = await _make_user(session)
+    own_file = await _make_file(session, owner.id, "cv")
+    candidate = await _service(session).create(
+        CandidateCreate(
+            user_id=owner.id, first_name="O", last_name="W", cv_file_id=own_file.id
+        ),
+        _candidate_actor(owner.id),
+    )
+    assert candidate.cv_file_id == own_file.id
+
+
+async def test_staff_can_link_any_users_cv_file(session: AsyncSession) -> None:
+    """Staff are exempt — they attach files across candidates during manual entry."""
+    victim = await _make_user(session)
+    subject = await _make_user(session)
+    victim_file = await _make_file(session, victim.id, "cv")
+    candidate = await _service(session).create(
+        CandidateCreate(
+            user_id=subject.id, first_name="S", last_name="J", cv_file_id=victim_file.id
+        ),
+        ACTOR,
+    )
+    assert candidate.cv_file_id == victim_file.id

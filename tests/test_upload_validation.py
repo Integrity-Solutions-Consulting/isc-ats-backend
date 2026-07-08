@@ -11,10 +11,10 @@ import zipfile
 import pytest
 
 from app.modules.storage.application.upload_validation import (
-    MAX_UPLOAD_BYTES,
     UploadTooLargeError,
     UploadTypeError,
     detect_mime,
+    max_bytes_for,
     validate_upload_bytes,
 )
 
@@ -111,12 +111,14 @@ def test_validate_rejects_unknown_content_for_cv() -> None:
 
 
 def test_validate_rejects_oversized_payload() -> None:
-    too_big = _PDF + b"\x00" * (MAX_UPLOAD_BYTES + 1)
+    cap = max_bytes_for("cv")
+    too_big = _PDF + b"\x00" * (cap + 1)
     with pytest.raises(UploadTooLargeError):
         validate_upload_bytes("cv", too_big)
 
 
 def test_validate_accepts_payload_at_the_limit() -> None:
-    at_limit = _PDF + b"\x00" * (MAX_UPLOAD_BYTES - len(_PDF))
-    assert len(at_limit) == MAX_UPLOAD_BYTES
+    cap = max_bytes_for("cv")
+    at_limit = _PDF + b"\x00" * (cap - len(_PDF))
+    assert len(at_limit) == cap
     assert validate_upload_bytes("cv", at_limit) == "application/pdf"

@@ -70,7 +70,7 @@ def test_candidate_permission_codes_are_the_expected_set() -> None:
     """The candidate permission set must match the BFF contract exactly."""
     expected = frozenset(
         {
-            "recruitment.vacancies.read",
+            "recruitment.vacancies.read_stages",
             "recruitment.candidates.read",
             "recruitment.candidates.create",
             "recruitment.candidates.update",

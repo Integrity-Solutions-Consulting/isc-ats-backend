@@ -7,7 +7,7 @@ permissions_catalog (source of truth), so no static seed data lives in migration
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,9 @@ CANDIDATE_ROLE_NAME = "candidate"
 # Verified against the frontend API calls — do not expand without a front-end audit.
 CANDIDATE_PERMISSION_CODES: frozenset[str] = frozenset(
     {
-        "recruitment.vacancies.read",
+        # Narrow: stage names only. NOT the coarse recruitment.vacancies.read, which
+        # also unlocks pipeline/documents/client info (cross-candidate PII leak).
+        "recruitment.vacancies.read_stages",
         "recruitment.candidates.read",
         "recruitment.candidates.create",
         "recruitment.candidates.update",
@@ -127,12 +129,20 @@ async def ensure_candidate_role(session: AsyncSession) -> Role:
 
 
 async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: int) -> int:
-    """Upsert exactly CANDIDATE_PERMISSION_CODES grants for the candidate role."""
+    """Make the candidate role hold EXACTLY CANDIDATE_PERMISSION_CODES.
+
+    Grants (upsert active) every allowlisted code and revokes (is_active=False) any
+    other grant on this role. Without the revoke, tightening the allowlist would only
+    stop *adding* a permission — an already-granted coarse code (e.g. the old
+    recruitment.vacancies.read) would linger and keep the leak open.
+    """
     permission_ids = (
         await session.execute(
             select(Permission.id).where(Permission.code.in_(CANDIDATE_PERMISSION_CODES))
         )
     ).scalars().all()
+    if not permission_ids:
+        return 0
     rows = [
         {"role_id": role_id, "permission_id": pid, "is_active": True}
         for pid in permission_ids
@@ -143,6 +153,16 @@ async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: in
         set_={"is_active": True},
     )
     await session.execute(stmt)
+
+    # Authoritative: revoke any grant on this role outside the allowlist so a
+    # previously-granted coarse permission is actually removed, not just left behind.
+    await session.execute(
+        update(RolePermission)
+        .where(RolePermission.role_id == role_id)
+        .where(RolePermission.permission_id.not_in(permission_ids))
+        .where(RolePermission.is_active.is_(True))
+        .values(is_active=False)
+    )
     return len(rows)
 
 
