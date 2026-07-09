@@ -9,7 +9,7 @@ class VacancyBase(BaseModel):
     client_company_id: int
     contact_id: int
     department_id: int
-    process_id: int
+    process_id: int | None = None
     career_id: int = Field(description="org.parameters (type=career)")
     city_id: int = Field(description="org.parameters (type=city)")
     work_mode_id: int = Field(description="org.parameters (type=work_mode)")
@@ -161,7 +161,7 @@ class PipelineSchema(BaseModel):
 class VacancyDocumentItem(BaseModel):
     """One generated Word profile document associated with a vacancy's candidate."""
 
-    id: int                     # application_documents.id
+    id: int  # application_documents.id
     application_id: int
     candidate_id: int
     candidate_name: str
@@ -172,5 +172,5 @@ class VacancyDocumentItem(BaseModel):
     file_id: int | None
     stored_key: str | None
     version: int
-    generated_by: str           # author display name (email → "Nombre Apellido")
+    generated_by: str  # author display name (email → "Nombre Apellido")
     generated_at: datetime

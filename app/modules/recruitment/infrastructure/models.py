@@ -42,16 +42,14 @@ class Vacancy(Base, AuditMixin, SoftDeleteMixin):
     client_company_id: Mapped[int] = mapped_column(_fk("org.client_companies.id"))
     contact_id: Mapped[int] = mapped_column(_fk("org.contacts.id"))
     department_id: Mapped[int] = mapped_column(_fk("org.departments.id"))
-    process_id: Mapped[int] = mapped_column(_fk("org.processes.id"))
+    process_id: Mapped[int | None] = mapped_column(_fk("org.processes.id"), default=None)
     career_id: Mapped[int] = mapped_column(_fk("org.parameters.id"))
     city_id: Mapped[int] = mapped_column(_fk("org.parameters.id"))
     work_mode_id: Mapped[int] = mapped_column(_fk("org.parameters.id"))
     profile_template_id: Mapped[int | None] = mapped_column(
         _fk("org.profile_templates.id"), default=None
     )
-    profile_requirements: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, default=None
-    )
+    profile_requirements: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     resource_level_id: Mapped[int] = mapped_column(_fk("org.parameters.id"))
     openings: Mapped[int] = mapped_column(default=1)
     experience_years: Mapped[int] = mapped_column(default=0)
@@ -60,6 +58,4 @@ class Vacancy(Base, AuditMixin, SoftDeleteMixin):
     project_duration_months: Mapped[int] = mapped_column(default=0)
     description: Mapped[str | None] = mapped_column(Text, default=None)
     status_id: Mapped[int] = mapped_column(_fk("org.parameters.id"))
-    published_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
