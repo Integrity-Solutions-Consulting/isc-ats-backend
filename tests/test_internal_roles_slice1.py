@@ -39,9 +39,7 @@ def test_vacancies_publish_is_in_all_codes() -> None:
 
 def test_vacancies_publish_spec_is_well_formed() -> None:
     """The PermissionSpec for publish must have module='recruitment' and a non-empty name."""
-    spec = next(
-        (s for s in PERMISSION_CATALOG if s.code == "recruitment.vacancies.publish"), None
-    )
+    spec = next((s for s in PERMISSION_CATALOG if s.code == "recruitment.vacancies.publish"), None)
     assert spec is not None
     assert spec.module == "recruitment"
     assert spec.name
@@ -85,9 +83,7 @@ async def test_grant_permissions_to_role_upserts_active(session: AsyncSession) -
     assert grants == 1
 
     pid_row = (
-        await session.execute(
-            select(Permission.id).where(Permission.code == "org.parameters.read")
-        )
+        await session.execute(select(Permission.id).where(Permission.code == "org.parameters.read"))
     ).scalar_one_or_none()
     assert pid_row is not None
 
@@ -173,19 +169,23 @@ async def test_grant_permissions_to_role_idempotent(session: AsyncSession) -> No
 
     # Must still have exactly 2 active grants — no duplicates.
     pids = (
-        await session.execute(
-            select(Permission.id).where(Permission.code.in_(allowlist))
-        )
-    ).scalars().all()
+        (await session.execute(select(Permission.id).where(Permission.code.in_(allowlist))))
+        .scalars()
+        .all()
+    )
 
     rps = (
-        await session.execute(
-            select(RolePermission).where(
-                RolePermission.role_id == role.id,
-                RolePermission.is_active.is_(True),
+        (
+            await session.execute(
+                select(RolePermission).where(
+                    RolePermission.role_id == role.id,
+                    RolePermission.is_active.is_(True),
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rps) == len(allowlist)
     assert {r.permission_id for r in rps} == set(pids)
 
@@ -215,44 +215,14 @@ def test_talento_humano_codes_exist_in_catalog() -> None:
 
 
 def test_talento_humano_permission_codes_exact_set() -> None:
-    """TALENTO_HUMANO_PERMISSION_CODES must match the confirmed allowlist from the matrix."""
+    """TALENTO_HUMANO_PERMISSION_CODES must match the authoritative allowlist from design #388."""
     from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
         TALENTO_HUMANO_PERMISSION_CODES,
     )
 
     expected = frozenset(
         {
-            # org
-            "org.parameters.read",
-            "org.departments.read",
-            "org.departments.create",
-            "org.departments.update",
-            "org.departments.delete",
-            "org.client_companies.read",
-            "org.client_companies.create",
-            "org.client_companies.update",
-            "org.client_companies.delete",
-            "org.contacts.read",
-            "org.contacts.create",
-            "org.contacts.update",
-            "org.contacts.delete",
-            "org.processes.read",
-            "org.processes.create",
-            "org.processes.update",
-            "org.processes.delete",
-            "org.process_stages.read",
-            "org.process_stages.create",
-            "org.process_stages.update",
-            "org.process_stages.delete",
-            "org.profile_templates.read",
-            "org.profile_templates.create",
-            "org.profile_templates.update",
-            "org.profile_templates.delete",
-            "org.profile_template_items.read",
-            "org.profile_template_items.create",
-            "org.profile_template_items.update",
-            "org.profile_template_items.delete",
-            # recruitment
+            # recruitment — full pipeline management
             "recruitment.vacancies.read",
             "recruitment.vacancies.create",
             "recruitment.vacancies.update",
@@ -266,22 +236,33 @@ def test_talento_humano_permission_codes_exact_set() -> None:
             "recruitment.applications.create",
             "recruitment.applications.update",
             "recruitment.applications.delete",
-            "recruitment.application_documents.read",
-            "recruitment.application_documents.create",
-            "recruitment.application_documents.update",
-            "recruitment.application_documents.delete",
             "recruitment.application_notes.read",
             "recruitment.application_notes.create",
             "recruitment.application_notes.update",
             "recruitment.application_notes.delete",
+            "recruitment.application_documents.read",
             "recruitment.interviews.read",
             "recruitment.interviews.create",
             "recruitment.interviews.update",
             "recruitment.interviews.delete",
-            "recruitment.interviewer_availability.read",
-            "recruitment.interviewer_availability.create",
-            "recruitment.interviewer_availability.update",
-            "recruitment.interviewer_availability.delete",
+            # org — processes, contacts; profile templates read-only; parameters read+create+update
+            "org.processes.read",
+            "org.processes.create",
+            "org.processes.update",
+            "org.processes.delete",
+            "org.process_stages.read",
+            "org.process_stages.create",
+            "org.process_stages.update",
+            "org.process_stages.delete",
+            "org.contacts.read",
+            "org.contacts.create",
+            "org.contacts.update",
+            "org.contacts.delete",
+            "org.profile_templates.read",
+            "org.profile_template_items.read",
+            "org.parameters.read",
+            "org.parameters.create",
+            "org.parameters.update",
             # talent
             "talent.talent_pool.read",
             "talent.talent_pool.create",
@@ -289,21 +270,47 @@ def test_talento_humano_permission_codes_exact_set() -> None:
             # storage
             "storage.files.read",
             "storage.files.create",
-            "storage.files.update",
-            "storage.files.delete",
-            # ai
-            "ai.cv_parse_jobs.read",
-            "ai.cv_parse_jobs.create",
-            "ai.cv_parse_jobs.update",
-            "ai.cv_parse_jobs.delete",
-            "ai.vacancy_promo_images.read",
-            "ai.vacancy_promo_images.create",
-            "ai.vacancy_promo_images.delete",
-            "ai.ai_usage_logs.read",
-            "ai.ai_usage_logs.create",
+            # comms
+            "comms.notifications.read",
         }
     )
     assert TALENTO_HUMANO_PERMISSION_CODES == expected
+
+
+def test_talento_humano_no_departments_or_client_companies() -> None:
+    """TH must NOT have org.departments.* or org.client_companies.* (outside TH scope)."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        TALENTO_HUMANO_PERMISSION_CODES,
+    )
+
+    forbidden = {
+        c for c in TALENTO_HUMANO_PERMISSION_CODES if "departments" in c or "client_companies" in c
+    }
+    assert not forbidden, f"TH must not hold department/client_companies permissions: {forbidden}"
+
+
+def test_talento_humano_no_ai_permissions() -> None:
+    """TH must NOT have any ai.* permissions per design #388."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        TALENTO_HUMANO_PERMISSION_CODES,
+    )
+
+    ai_codes = {c for c in TALENTO_HUMANO_PERMISSION_CODES if c.startswith("ai.")}
+    assert not ai_codes, f"TH must not hold ai.* permissions: {ai_codes}"
+
+
+def test_talento_humano_profile_templates_read_only() -> None:
+    """TH must have profile_templates/items READ only — no create/update/delete."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        TALENTO_HUMANO_PERMISSION_CODES,
+    )
+
+    forbidden = {
+        c
+        for c in TALENTO_HUMANO_PERMISSION_CODES
+        if ("profile_templates" in c or "profile_template_items" in c) and not c.endswith(".read")
+    }
+    assert not forbidden, f"TH must not hold profile_template write permissions: {forbidden}"
 
 
 async def test_bootstrap_creates_talento_humano_role_with_correct_grants(
@@ -337,7 +344,9 @@ async def test_bootstrap_creates_talento_humano_role_with_correct_grants(
                 .where(RolePermission.role_id == role.id)
                 .where(RolePermission.is_active.is_(True))
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     assert granted_codes == set(TALENTO_HUMANO_PERMISSION_CODES)
 
@@ -373,7 +382,9 @@ async def test_bootstrap_talento_humano_is_idempotent(session: AsyncSession) -> 
                 .where(RolePermission.role_id == role.id)
                 .where(RolePermission.is_active.is_(True))
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     assert granted_codes == set(TALENTO_HUMANO_PERMISSION_CODES)
 
@@ -419,74 +430,108 @@ def test_comercial_codes_exist_in_catalog() -> None:
 
 
 def test_comercial_permission_codes_exact_set() -> None:
-    """COMERCIAL_PERMISSION_CODES must match the confirmed allowlist from the matrix."""
+    """COMERCIAL_PERMISSION_CODES must match the authoritative allowlist from design #388."""
     from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
         COMERCIAL_PERMISSION_CODES,
     )
 
     expected = frozenset(
         {
-            # org — read-only access to org structures
-            "org.parameters.read",
-            "org.departments.read",
-            "org.client_companies.read",
-            "org.contacts.read",
-            "org.processes.read",
-            "org.process_stages.read",
-            "org.profile_templates.read",
-            "org.profile_template_items.read",
-            # recruitment — full CRUD on vacancies + candidates/pipeline
+            # recruitment — vacancy read+create only; pipeline read-only
             "recruitment.vacancies.read",
             "recruitment.vacancies.create",
-            "recruitment.vacancies.update",
-            "recruitment.vacancies.delete",
-            "recruitment.vacancies.publish",
             "recruitment.candidates.read",
-            "recruitment.candidates.create",
-            "recruitment.candidates.update",
-            "recruitment.candidates.delete",
             "recruitment.applications.read",
-            "recruitment.applications.create",
-            "recruitment.applications.update",
-            "recruitment.applications.delete",
-            "recruitment.application_documents.read",
-            "recruitment.application_documents.create",
-            "recruitment.application_documents.update",
-            "recruitment.application_documents.delete",
             "recruitment.application_notes.read",
-            "recruitment.application_notes.create",
-            "recruitment.application_notes.update",
-            "recruitment.application_notes.delete",
+            "recruitment.application_documents.read",
             "recruitment.interviews.read",
-            "recruitment.interviews.create",
-            "recruitment.interviews.update",
-            "recruitment.interviews.delete",
-            "recruitment.interviewer_availability.read",
-            "recruitment.interviewer_availability.create",
-            "recruitment.interviewer_availability.update",
-            "recruitment.interviewer_availability.delete",
-            # talent
+            # org — contacts read; profile templates/items full CRUD; parameters read+create+update
+            "org.contacts.read",
+            "org.profile_templates.read",
+            "org.profile_templates.create",
+            "org.profile_templates.update",
+            "org.profile_templates.delete",
+            "org.profile_template_items.read",
+            "org.profile_template_items.create",
+            "org.profile_template_items.update",
+            "org.profile_template_items.delete",
+            "org.parameters.read",
+            "org.parameters.create",
+            "org.parameters.update",
+            # talent — read only
             "talent.talent_pool.read",
-            "talent.talent_pool.create",
-            "talent.talent_pool.delete",
             # storage
             "storage.files.read",
             "storage.files.create",
-            "storage.files.update",
-            "storage.files.delete",
-            # ai
-            "ai.cv_parse_jobs.read",
-            "ai.cv_parse_jobs.create",
-            "ai.cv_parse_jobs.update",
-            "ai.cv_parse_jobs.delete",
-            "ai.vacancy_promo_images.read",
-            "ai.vacancy_promo_images.create",
-            "ai.vacancy_promo_images.delete",
-            "ai.ai_usage_logs.read",
-            "ai.ai_usage_logs.create",
+            # comms
+            "comms.notifications.read",
         }
     )
     assert COMERCIAL_PERMISSION_CODES == expected
+
+
+def test_comercial_no_vacancy_publish_update_delete() -> None:
+    """Comercial must NOT have vacancy publish, update, or delete — TH owns lifecycle."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        COMERCIAL_PERMISSION_CODES,
+    )
+
+    forbidden = {
+        "recruitment.vacancies.publish",
+        "recruitment.vacancies.update",
+        "recruitment.vacancies.delete",
+    }
+    violations = forbidden & COMERCIAL_PERMISSION_CODES
+    assert not violations, f"Comercial must not hold: {violations}"
+
+
+def test_comercial_no_processes_or_process_stages() -> None:
+    """Comercial must NOT have org.processes.* or org.process_stages.* (TH-only)."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        COMERCIAL_PERMISSION_CODES,
+    )
+
+    forbidden = {c for c in COMERCIAL_PERMISSION_CODES if "processes" in c or "process_stages" in c}
+    assert not forbidden, f"Comercial must not hold process/stage permissions: {forbidden}"
+
+
+def test_comercial_no_ai_permissions() -> None:
+    """Comercial must NOT have any ai.* permissions per design #388."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        COMERCIAL_PERMISSION_CODES,
+    )
+
+    ai_codes = {c for c in COMERCIAL_PERMISSION_CODES if c.startswith("ai.")}
+    assert not ai_codes, f"Comercial must not hold ai.* permissions: {ai_codes}"
+
+
+def test_comercial_pipeline_write_absent() -> None:
+    """Comercial pipeline access is read-only: no write on applications, notes, or interviews."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        COMERCIAL_PERMISSION_CODES,
+    )
+
+    pipeline_write = {
+        c
+        for c in COMERCIAL_PERMISSION_CODES
+        if any(res in c for res in ("applications", "application_notes", "interviews"))
+        and not c.endswith(".read")
+    }
+    assert not pipeline_write, f"Comercial must not hold pipeline write codes: {pipeline_write}"
+
+
+def test_comercial_talent_pool_read_only() -> None:
+    """Comercial talent_pool access is read-only — no create or delete."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        COMERCIAL_PERMISSION_CODES,
+    )
+
+    forbidden = {
+        "talent.talent_pool.create",
+        "talent.talent_pool.delete",
+    }
+    violations = forbidden & COMERCIAL_PERMISSION_CODES
+    assert not violations, f"Comercial must not hold talent pool write codes: {violations}"
 
 
 async def test_bootstrap_creates_comercial_role_with_correct_grants(
@@ -520,7 +565,9 @@ async def test_bootstrap_creates_comercial_role_with_correct_grants(
                 .where(RolePermission.role_id == role.id)
                 .where(RolePermission.is_active.is_(True))
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     assert granted_codes == set(COMERCIAL_PERMISSION_CODES)
 
@@ -556,7 +603,9 @@ async def test_bootstrap_creates_proyecto_role_with_correct_grants(
                 .where(RolePermission.role_id == role.id)
                 .where(RolePermission.is_active.is_(True))
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     assert granted_codes == set(PROYECTO_PERMISSION_CODES)
 
@@ -644,9 +693,7 @@ async def test_delete_talento_humano_endpoint_409(session: AsyncSession) -> None
         )
         role = (
             await session.execute(
-                select(Role)
-                .where(Role.name == "Talento Humano")
-                .where(Role.is_active.is_(True))
+                select(Role).where(Role.name == "Talento Humano").where(Role.is_active.is_(True))
             )
         ).scalar_one()
 
@@ -683,9 +730,7 @@ async def test_rename_comercial_endpoint_409(session: AsyncSession) -> None:
         )
         role = (
             await session.execute(
-                select(Role)
-                .where(Role.name == "Comercial")
-                .where(Role.is_active.is_(True))
+                select(Role).where(Role.name == "Comercial").where(Role.is_active.is_(True))
             )
         ).scalar_one()
 

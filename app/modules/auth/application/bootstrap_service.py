@@ -45,40 +45,15 @@ CANDIDATE_PERMISSION_CODES: frozenset[str] = frozenset(
     }
 )
 
-# Internal staff role — Talento Humano.  Full access to the recruitment pipeline,
-# org configuration management, talent pool, storage, and AI tooling.
+# Internal staff role — Talento Humano.
+# Full recruitment pipeline management (vacancies CRUD + publish, full candidate/application
+# pipeline, interviews). Owns process/stage configuration and contacts. Read-only on
+# profile templates and items (Comercial/Proyecto own template authoring). Talent pool
+# read+create+delete. Parameters read+create+update (a service guard narrows create/update
+# to vacancy_name type — see parameters slice). No org.departments, no org.client_companies,
+# no ai.* — those are outside TH's operational scope per design #388.
 TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
     {
-        # org — full CRUD on all configuration entities
-        "org.parameters.read",
-        "org.departments.read",
-        "org.departments.create",
-        "org.departments.update",
-        "org.departments.delete",
-        "org.client_companies.read",
-        "org.client_companies.create",
-        "org.client_companies.update",
-        "org.client_companies.delete",
-        "org.contacts.read",
-        "org.contacts.create",
-        "org.contacts.update",
-        "org.contacts.delete",
-        "org.processes.read",
-        "org.processes.create",
-        "org.processes.update",
-        "org.processes.delete",
-        "org.process_stages.read",
-        "org.process_stages.create",
-        "org.process_stages.update",
-        "org.process_stages.delete",
-        "org.profile_templates.read",
-        "org.profile_templates.create",
-        "org.profile_templates.update",
-        "org.profile_templates.delete",
-        "org.profile_template_items.read",
-        "org.profile_template_items.create",
-        "org.profile_template_items.update",
-        "org.profile_template_items.delete",
         # recruitment — full pipeline management
         "recruitment.vacancies.read",
         "recruitment.vacancies.create",
@@ -93,22 +68,33 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
         "recruitment.applications.create",
         "recruitment.applications.update",
         "recruitment.applications.delete",
-        "recruitment.application_documents.read",
-        "recruitment.application_documents.create",
-        "recruitment.application_documents.update",
-        "recruitment.application_documents.delete",
         "recruitment.application_notes.read",
         "recruitment.application_notes.create",
         "recruitment.application_notes.update",
         "recruitment.application_notes.delete",
+        "recruitment.application_documents.read",
         "recruitment.interviews.read",
         "recruitment.interviews.create",
         "recruitment.interviews.update",
         "recruitment.interviews.delete",
-        "recruitment.interviewer_availability.read",
-        "recruitment.interviewer_availability.create",
-        "recruitment.interviewer_availability.update",
-        "recruitment.interviewer_availability.delete",
+        # org — process/stage configuration + contacts; profile templates read-only
+        "org.processes.read",
+        "org.processes.create",
+        "org.processes.update",
+        "org.processes.delete",
+        "org.process_stages.read",
+        "org.process_stages.create",
+        "org.process_stages.update",
+        "org.process_stages.delete",
+        "org.contacts.read",
+        "org.contacts.create",
+        "org.contacts.update",
+        "org.contacts.delete",
+        "org.profile_templates.read",
+        "org.profile_template_items.read",
+        "org.parameters.read",
+        "org.parameters.create",
+        "org.parameters.update",
         # talent
         "talent.talent_pool.read",
         "talent.talent_pool.create",
@@ -116,88 +102,51 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
         # storage
         "storage.files.read",
         "storage.files.create",
-        "storage.files.update",
-        "storage.files.delete",
-        # ai
-        "ai.cv_parse_jobs.read",
-        "ai.cv_parse_jobs.create",
-        "ai.cv_parse_jobs.update",
-        "ai.cv_parse_jobs.delete",
-        "ai.vacancy_promo_images.read",
-        "ai.vacancy_promo_images.create",
-        "ai.vacancy_promo_images.delete",
-        "ai.ai_usage_logs.read",
-        "ai.ai_usage_logs.create",
+        # comms
+        "comms.notifications.read",
     }
 )
 
 # Internal staff roles — Comercial and Proyecto share an identical allowlist.
-# Comercial drives client-side requirements; Proyecto manages delivery execution.
-# Both need full recruitment pipeline access but only read-only access to org config.
+# Comercial manages client-side vacancy sourcing; Proyecto manages delivery execution.
+# Both roles: create vacancies (but cannot update/delete/publish — TH owns lifecycle),
+# read-only pipeline access (applications/notes/interviews/documents), read-only talent pool,
+# and full CRUD on profile templates and items (they own candidate profile authoring).
+# No org.processes/process_stages (TH owns those). No ai.* permissions.
 COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
     {
-        # org — read-only view of org structures (no configuration mutations)
-        "org.parameters.read",
-        "org.departments.read",
-        "org.client_companies.read",
-        "org.contacts.read",
-        "org.processes.read",
-        "org.process_stages.read",
-        "org.profile_templates.read",
-        "org.profile_template_items.read",
-        # recruitment — full pipeline management (same as TH)
+        # recruitment — vacancy read+create only; full pipeline read; no write on pipeline
         "recruitment.vacancies.read",
         "recruitment.vacancies.create",
-        "recruitment.vacancies.update",
-        "recruitment.vacancies.delete",
-        "recruitment.vacancies.publish",
         "recruitment.candidates.read",
-        "recruitment.candidates.create",
-        "recruitment.candidates.update",
-        "recruitment.candidates.delete",
         "recruitment.applications.read",
-        "recruitment.applications.create",
-        "recruitment.applications.update",
-        "recruitment.applications.delete",
-        "recruitment.application_documents.read",
-        "recruitment.application_documents.create",
-        "recruitment.application_documents.update",
-        "recruitment.application_documents.delete",
         "recruitment.application_notes.read",
-        "recruitment.application_notes.create",
-        "recruitment.application_notes.update",
-        "recruitment.application_notes.delete",
+        "recruitment.application_documents.read",
         "recruitment.interviews.read",
-        "recruitment.interviews.create",
-        "recruitment.interviews.update",
-        "recruitment.interviews.delete",
-        "recruitment.interviewer_availability.read",
-        "recruitment.interviewer_availability.create",
-        "recruitment.interviewer_availability.update",
-        "recruitment.interviewer_availability.delete",
-        # talent
+        # org — contacts read; full CRUD on profile templates/items; parameters read+create+update
+        "org.contacts.read",
+        "org.profile_templates.read",
+        "org.profile_templates.create",
+        "org.profile_templates.update",
+        "org.profile_templates.delete",
+        "org.profile_template_items.read",
+        "org.profile_template_items.create",
+        "org.profile_template_items.update",
+        "org.profile_template_items.delete",
+        "org.parameters.read",
+        "org.parameters.create",
+        "org.parameters.update",
+        # talent — read only
         "talent.talent_pool.read",
-        "talent.talent_pool.create",
-        "talent.talent_pool.delete",
         # storage
         "storage.files.read",
         "storage.files.create",
-        "storage.files.update",
-        "storage.files.delete",
-        # ai
-        "ai.cv_parse_jobs.read",
-        "ai.cv_parse_jobs.create",
-        "ai.cv_parse_jobs.update",
-        "ai.cv_parse_jobs.delete",
-        "ai.vacancy_promo_images.read",
-        "ai.vacancy_promo_images.create",
-        "ai.vacancy_promo_images.delete",
-        "ai.ai_usage_logs.read",
-        "ai.ai_usage_logs.create",
+        # comms
+        "comms.notifications.read",
     }
 )
 
-# Proyecto mirrors Comercial exactly — both roles have identical pipeline access.
+# Proyecto mirrors Comercial exactly — both roles have identical allowlists per design #388.
 PROYECTO_PERMISSION_CODES: frozenset[str] = COMERCIAL_PERMISSION_CODES
 
 
@@ -234,11 +183,7 @@ async def sync_permissions(session: AsyncSession) -> int:
 
 
 async def ensure_admin_role(session: AsyncSession) -> Role:
-    stmt = (
-        select(Role)
-        .where(Role.name == ADMIN_ROLE_NAME)
-        .where(Role.is_active.is_(True))
-    )
+    stmt = select(Role).where(Role.name == ADMIN_ROLE_NAME).where(Role.is_active.is_(True))
     role = (await session.execute(stmt)).scalar_one_or_none()
     if role is None:
         role = Role(name=ADMIN_ROLE_NAME, description="Full access — all permissions")
@@ -249,14 +194,11 @@ async def ensure_admin_role(session: AsyncSession) -> Role:
 
 async def grant_all_permissions_to_role(session: AsyncSession, role_id: int) -> int:
     permission_ids = (
-        await session.execute(
-            select(Permission.id).where(Permission.is_active.is_(True))
-        )
-    ).scalars().all()
-    rows = [
-        {"role_id": role_id, "permission_id": pid, "is_active": True}
-        for pid in permission_ids
-    ]
+        (await session.execute(select(Permission.id).where(Permission.is_active.is_(True))))
+        .scalars()
+        .all()
+    )
+    rows = [{"role_id": role_id, "permission_id": pid, "is_active": True} for pid in permission_ids]
     stmt = pg_insert(RolePermission).values(rows)
     stmt = stmt.on_conflict_do_update(
         index_elements=[RolePermission.role_id, RolePermission.permission_id],
@@ -267,11 +209,7 @@ async def grant_all_permissions_to_role(session: AsyncSession, role_id: int) -> 
 
 
 async def ensure_candidate_role(session: AsyncSession) -> Role:
-    stmt = (
-        select(Role)
-        .where(Role.name == CANDIDATE_ROLE_NAME)
-        .where(Role.is_active.is_(True))
-    )
+    stmt = select(Role).where(Role.name == CANDIDATE_ROLE_NAME).where(Role.is_active.is_(True))
     role = (await session.execute(stmt)).scalar_one_or_none()
     if role is None:
         role = Role(
@@ -296,16 +234,13 @@ async def grant_permissions_to_role(
     rows actually changed).
     """
     permission_ids = (
-        await session.execute(
-            select(Permission.id).where(Permission.code.in_(allowlist))
-        )
-    ).scalars().all()
+        (await session.execute(select(Permission.id).where(Permission.code.in_(allowlist))))
+        .scalars()
+        .all()
+    )
     if not permission_ids:
         return 0
-    rows = [
-        {"role_id": role_id, "permission_id": pid, "is_active": True}
-        for pid in permission_ids
-    ]
+    rows = [{"role_id": role_id, "permission_id": pid, "is_active": True} for pid in permission_ids]
     stmt = pg_insert(RolePermission).values(rows)
     stmt = stmt.on_conflict_do_update(
         index_elements=[RolePermission.role_id, RolePermission.permission_id],
@@ -337,9 +272,7 @@ async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: in
 async def ensure_admin_user(
     session: AsyncSession, email: str, password: str, portal_id: int
 ) -> tuple[User, bool]:
-    existing = (
-        await session.execute(select(User).where(User.email == email))
-    ).scalar_one_or_none()
+    existing = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if existing is not None:
         return existing, False
     user = User(
@@ -354,12 +287,8 @@ async def ensure_admin_user(
     return user, True
 
 
-async def assign_role_to_user(
-    session: AsyncSession, user_id: int, role_id: int
-) -> None:
-    stmt = pg_insert(UserRole).values(
-        user_id=user_id, role_id=role_id, is_active=True
-    )
+async def assign_role_to_user(session: AsyncSession, user_id: int, role_id: int) -> None:
+    stmt = pg_insert(UserRole).values(user_id=user_id, role_id=role_id, is_active=True)
     stmt = stmt.on_conflict_do_update(
         index_elements=[UserRole.user_id, UserRole.role_id],
         set_={"is_active": True},
@@ -367,9 +296,7 @@ async def assign_role_to_user(
     await session.execute(stmt)
 
 
-async def bootstrap_admin(
-    session: AsyncSession, email: str, password: str
-) -> BootstrapResult:
+async def bootstrap_admin(session: AsyncSession, email: str, password: str) -> BootstrapResult:
     """Sync permissions, ensure the admin role with all grants, and the admin user."""
     portal = await ParameterRepository(session).get_by_type_and_code(
         "user_portal", ADMIN_PORTAL_CODE
