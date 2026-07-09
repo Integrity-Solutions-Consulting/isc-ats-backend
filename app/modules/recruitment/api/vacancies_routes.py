@@ -1,15 +1,21 @@
 import io
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
+from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUserDep, SessionDep
+from app.core.task_queue import TaskQueueDep, register_task
 from app.modules.auth.api.authorization import (
     PermissionCodesDep,
     require_any_permission,
     require_permission,
 )
+from app.modules.auth.application.bootstrap_service import TALENTO_HUMANO_ROLE_NAME
+from app.modules.comms.application.email_templates import render_solicitud_created_email
+from app.modules.comms.application.notifications_service import notify_role
 from app.modules.org.infrastructure.models import (
     ClientCompany,
     Contact,
@@ -18,6 +24,7 @@ from app.modules.org.infrastructure.models import (
     Process,
     ProfileTemplate,
 )
+from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.application_notes_schemas import _author_name_from_email
 from app.modules.recruitment.api.vacancies_schemas import (
     PipelineCardSchema,
@@ -55,7 +62,51 @@ from app.shared.ownership import forbid_candidate_portal
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/vacancies", tags=["recruitment · vacancies"])
+
+
+async def _notify_solicitud_created(vacancy_id: int) -> None:
+    """Background task: fan-out in-app + email notifications to all active Talento Humano users.
+
+    Opens its own DB session (the request session is already closed by the time
+    this runs). Resolves the vacancy name from the catalog, then calls notify_role
+    with email_render so every active TH user receives both an in-app notification
+    and an email.
+
+    Never propagates exceptions — a failed notification must not affect the
+    already-committed vacancy creation.
+    """
+    async with async_session_factory() as session:
+        try:
+            vacancy = await BaseRepository(session, Vacancy).get(vacancy_id, include_inactive=True)
+            if vacancy is None:
+                logger.warning("_notify_solicitud_created: vacancy %s not found", vacancy_id)
+                return
+            # Resolve the human-readable vacancy name from the catalog.
+            params = ParameterRepository(session)
+            vacancy_name_param = await params.get(vacancy.vacancy_name_id, include_inactive=True)
+            vacancy_title = vacancy_name_param.name if vacancy_name_param is not None else "Vacante"
+
+            await notify_role(
+                session,
+                role_name=TALENTO_HUMANO_ROLE_NAME,
+                title="Nueva solicitud de vacante",
+                body=f"Se creó una nueva solicitud: {vacancy_title}.",
+                related_entity_type="vacancy",
+                related_entity_id=vacancy_id,
+                email_render=lambda email, _title: render_solicitud_created_email(
+                    email, vacancy_title
+                ),
+            )
+            await session.commit()
+        except Exception:
+            logger.exception("Failed to notify solicitud created for vacancy %s", vacancy_id)
+            await session.rollback()
+
+
+register_task("notify_solicitud_created", _notify_solicitud_created)
 
 
 # ── Public endpoints (no authentication required) ─────────────────────────────
@@ -230,6 +281,8 @@ async def create_vacancy(
     service: ServiceDep,
     current_user: CurrentUserDep,
     caller_codes: PermissionCodesDep,
+    task_queue: TaskQueueDep,
+    session: SessionDep,
 ) -> VacancyRead:
     try:
         created = await service.create(data, current_user, caller_permission_codes=caller_codes)
@@ -239,6 +292,15 @@ async def create_vacancy(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except VacancyReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # Notify Talento Humano only when the vacancy was created as a solicitud
+    # (non-publisher path — Comercial/Proyecto). Publisher-created active vacancies
+    # do not trigger fan-out.
+    params_repo = ParameterRepository(session)
+    vacancy_status_param = await params_repo.get(created.status_id, include_inactive=True)
+    if vacancy_status_param is not None and vacancy_status_param.code == "solicitud":
+        await task_queue.enqueue("notify_solicitud_created", created.id)
+
     return VacancyRead.model_validate(created)
 
 

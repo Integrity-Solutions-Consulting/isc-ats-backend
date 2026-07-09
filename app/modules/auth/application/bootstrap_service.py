@@ -27,6 +27,12 @@ ADMIN_PORTAL_CODE = "staff"
 
 CANDIDATE_ROLE_NAME = "candidate"
 
+# Internal staff role name constants — single source of truth; imported by
+# notification fan-out and any other code that resolves roles by name.
+TALENTO_HUMANO_ROLE_NAME = "Talento Humano"
+COMERCIAL_ROLE_NAME = "Comercial"
+PROYECTO_ROLE_NAME = "Proyecto"
+
 # Exact permission codes the candidate-portal BFF is allowed to call.
 # Verified against the frontend API calls — do not expand without a front-end audit.
 CANDIDATE_PERMISSION_CODES: frozenset[str] = frozenset(
@@ -318,9 +324,17 @@ async def bootstrap_admin(session: AsyncSession, email: str, password: str) -> B
 
     # Internal staff roles — created idempotently and granted their exact allowlists.
     _internal_roles: list[tuple[str, str, frozenset[str]]] = [
-        ("Talento Humano", "HR and recruitment management", TALENTO_HUMANO_PERMISSION_CODES),
-        ("Comercial", "Commercial team — client-driven recruitment", COMERCIAL_PERMISSION_CODES),
-        ("Proyecto", "Project team — delivery-side recruitment", PROYECTO_PERMISSION_CODES),
+        (
+            TALENTO_HUMANO_ROLE_NAME,
+            "HR and recruitment management",
+            TALENTO_HUMANO_PERMISSION_CODES,
+        ),
+        (
+            COMERCIAL_ROLE_NAME,
+            "Commercial team — client-driven recruitment",
+            COMERCIAL_PERMISSION_CODES,
+        ),
+        (PROYECTO_ROLE_NAME, "Project team — delivery-side recruitment", PROYECTO_PERMISSION_CODES),
     ]
     for rname, rdesc, rcodes in _internal_roles:
         stmt = select(Role).where(Role.name == rname).where(Role.is_active.is_(True))
