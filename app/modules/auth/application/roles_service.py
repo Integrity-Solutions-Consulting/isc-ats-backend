@@ -7,7 +7,12 @@ from app.shared.pagination import PageParams
 from app.shared.repository import BaseRepository
 
 # System roles are bootstrap-managed and may not be renamed or deleted.
-SYSTEM_ROLE_NAMES: frozenset[str] = frozenset({"Administrador", "candidate"})
+# "Administrador" and "candidate" are the original system roles; the three internal
+# staff roles are added here so that bootstrap can safely re-grant their allowlists
+# without the risk of a human operator accidentally renaming or deleting them.
+SYSTEM_ROLE_NAMES: frozenset[str] = frozenset(
+    {"Administrador", "candidate", "Talento Humano", "Comercial", "Proyecto"}
+)
 
 
 class RoleNotFoundError(Exception):
@@ -83,7 +88,7 @@ class RoleService:
         if "name" in changes and changes["name"] is None:
             del changes["name"]
         if role.name in SYSTEM_ROLE_NAMES:
-            # System roles cannot be renamed or deleted, but other fields (e.g. description) may pass through unchanged.
+            # System roles cannot be renamed or deleted; other fields pass through unchanged.
             if "name" in changes and changes["name"] != role.name:
                 raise SystemRoleError(
                     f"Role '{role.name}' is a system role and cannot be renamed"
