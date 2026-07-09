@@ -64,32 +64,13 @@ def _get_migration():
 
 
 async def test_migration_renames_draft_to_solicitud(session: AsyncSession) -> None:
-    """After upgrade(): draft row is gone, solicitud row exists with name='Solicitud'.
+    """Post-migration (DB at head): draft row is gone, solicitud row exists with name='Solicitud'.
 
-    This test runs the migration's upgrade() SQL directly within the rolled-back
-    session so it is safe on any DB revision and leaves no permanent state.
+    The rename migration (a1c2e3f4b5d6) runs in-place via ``alembic upgrade head``.
+    The project's integration DB is required to be at head, so this asserts the
+    observable migrated state (spec R5.2 / R5.3) rather than re-running the SQL,
+    which would collide with the already-renamed 'solicitud' row (unique type+code).
     """
-    # Ensure a draft vacancy_status row exists for this test (may not be seeded if
-    # the DB is at an early revision and the seed migration hasn't run yet).
-    await session.execute(
-        text(
-            "INSERT INTO org.parameters (type, code, name, is_active, created_at) "
-            "VALUES ('vacancy_status', 'draft', 'Borrador', true, now()) "
-            "ON CONFLICT (type, code) DO NOTHING"
-        )
-    )
-    await session.flush()
-
-    # Run the migration's upgrade SQL inline.
-    await session.execute(
-        text(
-            "UPDATE org.parameters "
-            "SET code = 'solicitud', name = 'Solicitud' "
-            "WHERE type = 'vacancy_status' AND code = 'draft'"
-        )
-    )
-    await session.flush()
-
     # Assert: draft is gone.
     draft_count = (
         await session.execute(
