@@ -45,6 +45,161 @@ CANDIDATE_PERMISSION_CODES: frozenset[str] = frozenset(
     }
 )
 
+# Internal staff role — Talento Humano.  Full access to the recruitment pipeline,
+# org configuration management, talent pool, storage, and AI tooling.
+TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
+    {
+        # org — full CRUD on all configuration entities
+        "org.parameters.read",
+        "org.departments.read",
+        "org.departments.create",
+        "org.departments.update",
+        "org.departments.delete",
+        "org.client_companies.read",
+        "org.client_companies.create",
+        "org.client_companies.update",
+        "org.client_companies.delete",
+        "org.contacts.read",
+        "org.contacts.create",
+        "org.contacts.update",
+        "org.contacts.delete",
+        "org.processes.read",
+        "org.processes.create",
+        "org.processes.update",
+        "org.processes.delete",
+        "org.process_stages.read",
+        "org.process_stages.create",
+        "org.process_stages.update",
+        "org.process_stages.delete",
+        "org.profile_templates.read",
+        "org.profile_templates.create",
+        "org.profile_templates.update",
+        "org.profile_templates.delete",
+        "org.profile_template_items.read",
+        "org.profile_template_items.create",
+        "org.profile_template_items.update",
+        "org.profile_template_items.delete",
+        # recruitment — full pipeline management
+        "recruitment.vacancies.read",
+        "recruitment.vacancies.create",
+        "recruitment.vacancies.update",
+        "recruitment.vacancies.delete",
+        "recruitment.vacancies.publish",
+        "recruitment.candidates.read",
+        "recruitment.candidates.create",
+        "recruitment.candidates.update",
+        "recruitment.candidates.delete",
+        "recruitment.applications.read",
+        "recruitment.applications.create",
+        "recruitment.applications.update",
+        "recruitment.applications.delete",
+        "recruitment.application_documents.read",
+        "recruitment.application_documents.create",
+        "recruitment.application_documents.update",
+        "recruitment.application_documents.delete",
+        "recruitment.application_notes.read",
+        "recruitment.application_notes.create",
+        "recruitment.application_notes.update",
+        "recruitment.application_notes.delete",
+        "recruitment.interviews.read",
+        "recruitment.interviews.create",
+        "recruitment.interviews.update",
+        "recruitment.interviews.delete",
+        "recruitment.interviewer_availability.read",
+        "recruitment.interviewer_availability.create",
+        "recruitment.interviewer_availability.update",
+        "recruitment.interviewer_availability.delete",
+        # talent
+        "talent.talent_pool.read",
+        "talent.talent_pool.create",
+        "talent.talent_pool.delete",
+        # storage
+        "storage.files.read",
+        "storage.files.create",
+        "storage.files.update",
+        "storage.files.delete",
+        # ai
+        "ai.cv_parse_jobs.read",
+        "ai.cv_parse_jobs.create",
+        "ai.cv_parse_jobs.update",
+        "ai.cv_parse_jobs.delete",
+        "ai.vacancy_promo_images.read",
+        "ai.vacancy_promo_images.create",
+        "ai.vacancy_promo_images.delete",
+        "ai.ai_usage_logs.read",
+        "ai.ai_usage_logs.create",
+    }
+)
+
+# Internal staff roles — Comercial and Proyecto share an identical allowlist.
+# Comercial drives client-side requirements; Proyecto manages delivery execution.
+# Both need full recruitment pipeline access but only read-only access to org config.
+COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
+    {
+        # org — read-only view of org structures (no configuration mutations)
+        "org.parameters.read",
+        "org.departments.read",
+        "org.client_companies.read",
+        "org.contacts.read",
+        "org.processes.read",
+        "org.process_stages.read",
+        "org.profile_templates.read",
+        "org.profile_template_items.read",
+        # recruitment — full pipeline management (same as TH)
+        "recruitment.vacancies.read",
+        "recruitment.vacancies.create",
+        "recruitment.vacancies.update",
+        "recruitment.vacancies.delete",
+        "recruitment.vacancies.publish",
+        "recruitment.candidates.read",
+        "recruitment.candidates.create",
+        "recruitment.candidates.update",
+        "recruitment.candidates.delete",
+        "recruitment.applications.read",
+        "recruitment.applications.create",
+        "recruitment.applications.update",
+        "recruitment.applications.delete",
+        "recruitment.application_documents.read",
+        "recruitment.application_documents.create",
+        "recruitment.application_documents.update",
+        "recruitment.application_documents.delete",
+        "recruitment.application_notes.read",
+        "recruitment.application_notes.create",
+        "recruitment.application_notes.update",
+        "recruitment.application_notes.delete",
+        "recruitment.interviews.read",
+        "recruitment.interviews.create",
+        "recruitment.interviews.update",
+        "recruitment.interviews.delete",
+        "recruitment.interviewer_availability.read",
+        "recruitment.interviewer_availability.create",
+        "recruitment.interviewer_availability.update",
+        "recruitment.interviewer_availability.delete",
+        # talent
+        "talent.talent_pool.read",
+        "talent.talent_pool.create",
+        "talent.talent_pool.delete",
+        # storage
+        "storage.files.read",
+        "storage.files.create",
+        "storage.files.update",
+        "storage.files.delete",
+        # ai
+        "ai.cv_parse_jobs.read",
+        "ai.cv_parse_jobs.create",
+        "ai.cv_parse_jobs.update",
+        "ai.cv_parse_jobs.delete",
+        "ai.vacancy_promo_images.read",
+        "ai.vacancy_promo_images.create",
+        "ai.vacancy_promo_images.delete",
+        "ai.ai_usage_logs.read",
+        "ai.ai_usage_logs.create",
+    }
+)
+
+# Proyecto mirrors Comercial exactly — both roles have identical pipeline access.
+PROYECTO_PERMISSION_CODES: frozenset[str] = COMERCIAL_PERMISSION_CODES
+
 
 class BootstrapError(Exception):
     """Raised when the environment is not ready to bootstrap (e.g. missing seed)."""
@@ -128,17 +283,21 @@ async def ensure_candidate_role(session: AsyncSession) -> Role:
     return role
 
 
-async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: int) -> int:
-    """Make the candidate role hold EXACTLY CANDIDATE_PERMISSION_CODES.
+async def grant_permissions_to_role(
+    session: AsyncSession, role_id: int, allowlist: frozenset[str]
+) -> int:
+    """Make a role hold EXACTLY the permissions named in *allowlist*.
 
-    Grants (upsert active) every allowlisted code and revokes (is_active=False) any
-    other grant on this role. Without the revoke, tightening the allowlist would only
-    stop *adding* a permission — an already-granted coarse code (e.g. the old
-    recruitment.vacancies.read) would linger and keep the leak open.
+    Upserts active grants for every code in *allowlist* and revokes (is_active=False)
+    any existing active grant on this role whose permission code is NOT in the list.
+    Safe to call multiple times — the result is always the same stable state.
+
+    Returns the number of grants in the allowlist (may differ from the number of
+    rows actually changed).
     """
     permission_ids = (
         await session.execute(
-            select(Permission.id).where(Permission.code.in_(CANDIDATE_PERMISSION_CODES))
+            select(Permission.id).where(Permission.code.in_(allowlist))
         )
     ).scalars().all()
     if not permission_ids:
@@ -155,7 +314,7 @@ async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: in
     await session.execute(stmt)
 
     # Authoritative: revoke any grant on this role outside the allowlist so a
-    # previously-granted coarse permission is actually removed, not just left behind.
+    # previously-granted permission is actually removed, not just left behind.
     await session.execute(
         update(RolePermission)
         .where(RolePermission.role_id == role_id)
@@ -164,6 +323,15 @@ async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: in
         .values(is_active=False)
     )
     return len(rows)
+
+
+async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: int) -> int:
+    """Make the candidate role hold EXACTLY CANDIDATE_PERMISSION_CODES.
+
+    Thin wrapper over :func:`grant_permissions_to_role` kept for backwards
+    compatibility.
+    """
+    return await grant_permissions_to_role(session, role_id, CANDIDATE_PERMISSION_CODES)
 
 
 async def ensure_admin_user(
@@ -221,13 +389,20 @@ async def bootstrap_admin(
     candidate_role = await ensure_candidate_role(session)
     await grant_candidate_permissions_to_role(session, candidate_role.id)
 
-    # Ensure other standard roles exist
-    for rname in ["Talento Humano", "Comercial", "Proyecto"]:
+    # Internal staff roles — created idempotently and granted their exact allowlists.
+    _internal_roles: list[tuple[str, str, frozenset[str]]] = [
+        ("Talento Humano", "HR and recruitment management", TALENTO_HUMANO_PERMISSION_CODES),
+        ("Comercial", "Commercial team — client-driven recruitment", COMERCIAL_PERMISSION_CODES),
+        ("Proyecto", "Project team — delivery-side recruitment", PROYECTO_PERMISSION_CODES),
+    ]
+    for rname, rdesc, rcodes in _internal_roles:
         stmt = select(Role).where(Role.name == rname).where(Role.is_active.is_(True))
-        existing_role = (await session.execute(stmt)).scalar_one_or_none()
-        if existing_role is None:
-            session.add(Role(name=rname, description=f"Rol de {rname}"))
-    await session.flush()
+        internal_role = (await session.execute(stmt)).scalar_one_or_none()
+        if internal_role is None:
+            internal_role = Role(name=rname, description=rdesc)
+            session.add(internal_role)
+            await session.flush()
+        await grant_permissions_to_role(session, internal_role.id, rcodes)
 
     return BootstrapResult(
         permissions_synced=permissions,
