@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.core.dependencies import CurrentUserDep, SessionDep
-from app.modules.auth.api.authorization import require_any_permission, require_permission
+from app.modules.auth.api.authorization import (
+    PermissionCodesDep,
+    require_any_permission,
+    require_permission,
+)
 from app.modules.org.infrastructure.models import (
     ClientCompany,
     Contact,
@@ -32,6 +36,8 @@ from app.modules.recruitment.application.vacancies_service import (
     VacancyCloseError,
     VacancyInUseError,
     VacancyNotFoundError,
+    VacancyProcessRequiredError,
+    VacancyPublishForbiddenError,
     VacancyReferenceError,
     VacancyService,
 )
@@ -53,6 +59,7 @@ router = APIRouter(prefix="/vacancies", tags=["recruitment · vacancies"])
 
 
 # ── Public endpoints (no authentication required) ─────────────────────────────
+
 
 @router.get(
     "/public",
@@ -125,6 +132,7 @@ async def get_vacancy_public(vacancy_id: int, session: SessionDep) -> PublicVaca
 
 # ── Authenticated endpoints ────────────────────────────────────────────────────
 
+
 def get_service(session: SessionDep) -> VacancyService:
     applications = ApplicationUsageRepository(session)
     return VacancyService(
@@ -168,9 +176,7 @@ async def list_vacancies_expanded(
         department_id=department_id,
         include_inactive=include_inactive,
     )
-    return Page.create(
-        [VacancyListItem(**vars(item)) for item in items], total, params
-    )
+    return Page.create([VacancyListItem(**vars(item)) for item in items], total, params)
 
 
 @router.get(
@@ -220,10 +226,17 @@ async def get_vacancy(
     dependencies=[Depends(require_permission("recruitment.vacancies.create"))],
 )
 async def create_vacancy(
-    data: VacancyCreate, service: ServiceDep, current_user: CurrentUserDep
+    data: VacancyCreate,
+    service: ServiceDep,
+    current_user: CurrentUserDep,
+    caller_codes: PermissionCodesDep,
 ) -> VacancyRead:
     try:
-        created = await service.create(data, current_user)
+        created = await service.create(data, current_user, caller_permission_codes=caller_codes)
+    except VacancyPublishForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except VacancyProcessRequiredError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except VacancyReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return VacancyRead.model_validate(created)
@@ -239,11 +252,18 @@ async def update_vacancy(
     data: VacancyUpdate,
     service: ServiceDep,
     current_user: CurrentUserDep,
+    caller_codes: PermissionCodesDep,
 ) -> VacancyRead:
     try:
-        updated = await service.update(vacancy_id, data, current_user)
+        updated = await service.update(
+            vacancy_id, data, current_user, caller_permission_codes=caller_codes
+        )
     except VacancyNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except VacancyPublishForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except VacancyProcessRequiredError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except VacancyReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except VacancyCloseError as exc:
@@ -304,9 +324,7 @@ async def get_vacancy_stages(vacancy_id: int, session: SessionDep) -> list[Vacan
     "/{vacancy_id}/generate-poster",
     dependencies=[Depends(require_permission("recruitment.vacancies.read"))],
 )
-async def generate_poster(
-    vacancy_id: int, current_user: CurrentUserDep
-) -> StreamingResponse:
+async def generate_poster(vacancy_id: int, current_user: CurrentUserDep) -> StreamingResponse:
     forbid_candidate_portal(current_user)
     try:
         image_bytes = await generate_vacancy_poster(vacancy_id)
@@ -335,9 +353,14 @@ async def get_vacancy_documents(
     rows = await PipelineRepository(session).get_vacancy_documents(vacancy_id)
 
     avatar_colors = [
-        "bg-primary-600", "bg-accent-500", "bg-primary-400",
-        "bg-primary-700", "bg-accent-600", "bg-primary-300",
-        "bg-accent-400", "bg-primary-500",
+        "bg-primary-600",
+        "bg-accent-500",
+        "bg-primary-400",
+        "bg-primary-700",
+        "bg-accent-600",
+        "bg-primary-300",
+        "bg-accent-400",
+        "bg-primary-500",
     ]
 
     # Build version map per candidate (count docs ascending by date → version number)
@@ -357,21 +380,23 @@ async def get_vacancy_documents(
         author = _author_name_from_email(row.author_email)
         fname = row.original_name or f"perfil_{row.application_id}.docx"
 
-        items.append(VacancyDocumentItem(
-            id=row.id,
-            application_id=row.application_id,
-            candidate_id=row.candidate_id,
-            candidate_name=f"{row.first_name} {row.last_name}",
-            candidate_initials=initials,
-            candidate_avatar_color=color,
-            stage_name_at_generation=row.stage_name,
-            file_name=fname,
-            file_id=row.file_id,
-            stored_key=row.stored_key,
-            version=ver,
-            generated_by=author,
-            generated_at=row.created_at,
-        ))
+        items.append(
+            VacancyDocumentItem(
+                id=row.id,
+                application_id=row.application_id,
+                candidate_id=row.candidate_id,
+                candidate_name=f"{row.first_name} {row.last_name}",
+                candidate_initials=initials,
+                candidate_avatar_color=color,
+                stage_name_at_generation=row.stage_name,
+                file_name=fname,
+                file_id=row.file_id,
+                stored_key=row.stored_key,
+                version=ver,
+                generated_by=author,
+                generated_at=row.created_at,
+            )
+        )
 
     return items
 
@@ -388,9 +413,14 @@ async def get_vacancy_pipeline(
     data = await PipelineRepository(session).get_pipeline(vacancy_id)
 
     avatar_colors = [
-        "bg-primary-600", "bg-accent-500", "bg-primary-400",
-        "bg-primary-700", "bg-accent-600", "bg-primary-300",
-        "bg-accent-400", "bg-primary-500",
+        "bg-primary-600",
+        "bg-accent-500",
+        "bg-primary-400",
+        "bg-primary-700",
+        "bg-accent-600",
+        "bg-primary-300",
+        "bg-accent-400",
+        "bg-primary-500",
     ]
 
     # Expose a sequential 1..N display position instead of the stored sort key:
@@ -410,13 +440,15 @@ async def get_vacancy_pipeline(
     # Virtual "Rechazado" stage — always appended last so the board always shows it.
     # BUG-22: Note that stageId="rejected" is a sentinel string recognized by the
     # frontend to render the rejected candidates column.
-    stages.append(PipelineStageSchema(
-        id="rejected",
-        vacancyId=str(vacancy_id),
-        name="Rechazados",
-        order=len(stages) + 1,
-        type="rejected",
-    ))
+    stages.append(
+        PipelineStageSchema(
+            id="rejected",
+            vacancyId=str(vacancy_id),
+            name="Rechazados",
+            order=len(stages) + 1,
+            type="rejected",
+        )
+    )
 
     cards = [
         PipelineCardSchema(
