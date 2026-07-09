@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.dependencies import CurrentUserDep, SessionDep
-from app.modules.auth.api.authorization import require_permission
+from app.modules.auth.api.authorization import PermissionCodesDep, require_permission
 from app.modules.org.api.parameters_schemas import (
     ParameterCreate,
     ParameterRead,
@@ -14,6 +14,7 @@ from app.modules.org.application.parameters_service import (
     ParameterInUseError,
     ParameterNotFoundError,
     ParameterService,
+    ParameterTypeForbiddenError,
 )
 from app.modules.org.infrastructure.parameter_usage_repository import (
     ParameterUsageRepository,
@@ -22,6 +23,18 @@ from app.modules.org.infrastructure.parameters_repository import ParameterReposi
 from app.shared.pagination import Page, PageParams
 
 router = APIRouter(prefix="/parameters", tags=["org · parameters"])
+
+# Callers without auth.roles.create (i.e. not full admins) may only create/update
+# parameters of type "vacancy_name" — every other catalog type is admin-managed.
+# See ParameterService.create/update `restrict_to_types` (spec R8).
+_ROLES_CREATE_PERMISSION = "auth.roles.create"
+_RESTRICTED_PARAMETER_TYPES: set[str] = {"vacancy_name"}
+
+
+def _restrict_to_types(caller_codes: set[str]) -> set[str] | None:
+    if _ROLES_CREATE_PERMISSION in caller_codes:
+        return None
+    return _RESTRICTED_PARAMETER_TYPES
 
 
 def get_service(session: SessionDep) -> ParameterService:
@@ -73,11 +86,16 @@ async def create_parameter(
     data: ParameterCreate,
     service: ServiceDep,
     current_user: CurrentUserDep,
+    caller_codes: PermissionCodesDep,
 ) -> ParameterRead:
     try:
-        created = await service.create(data, current_user)
+        created = await service.create(
+            data, current_user, restrict_to_types=_restrict_to_types(caller_codes)
+        )
     except DuplicateParameterError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ParameterTypeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     return ParameterRead.model_validate(created)
 
 
@@ -91,11 +109,19 @@ async def update_parameter(
     data: ParameterUpdate,
     service: ServiceDep,
     current_user: CurrentUserDep,
+    caller_codes: PermissionCodesDep,
 ) -> ParameterRead:
     try:
-        updated = await service.update(parameter_id, data, current_user)
+        updated = await service.update(
+            parameter_id,
+            data,
+            current_user,
+            restrict_to_types=_restrict_to_types(caller_codes),
+        )
     except ParameterNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ParameterTypeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     return ParameterRead.model_validate(updated)
 
 

@@ -22,6 +22,11 @@ class ParameterInUseError(ParameterError):
     """Cannot delete a parameter still referenced by an active record."""
 
 
+class ParameterTypeForbiddenError(ParameterError):
+    """Caller is restricted to a subset of parameter types and the requested/effective
+    type falls outside that allowlist (spec R8, → 403)."""
+
+
 class ParameterService:
     """Thin application service for the org.parameters catalog.
 
@@ -53,7 +58,17 @@ class ParameterService:
             raise ParameterNotFoundError(f"Parameter {parameter_id} not found")
         return parameter
 
-    async def create(self, data: ParameterCreate, actor: CurrentUser) -> Parameter:
+    async def create(
+        self,
+        data: ParameterCreate,
+        actor: CurrentUser,
+        *,
+        restrict_to_types: set[str] | None = None,
+    ) -> Parameter:
+        if restrict_to_types is not None and data.type not in restrict_to_types:
+            raise ParameterTypeForbiddenError(
+                f"Not allowed to create parameters of type '{data.type}'"
+            )
         existing = await self.repository.get_by_type_and_code(data.type, data.code)
         if existing is not None:
             raise DuplicateParameterError(
@@ -73,8 +88,16 @@ class ParameterService:
         parameter_id: int,
         data: ParameterUpdate,
         actor: CurrentUser,
+        *,
+        restrict_to_types: set[str] | None = None,
     ) -> Parameter:
         parameter = await self.get(parameter_id)
+        if restrict_to_types is not None:
+            effective_type = data.type if data.type is not None else parameter.type
+            if effective_type not in restrict_to_types:
+                raise ParameterTypeForbiddenError(
+                    f"Not allowed to update parameters of type '{effective_type}'"
+                )
         changes = data.model_dump(exclude_unset=True)
         changes["updated_by"] = actor.user_id
         changes["ip_updated"] = actor.ip
