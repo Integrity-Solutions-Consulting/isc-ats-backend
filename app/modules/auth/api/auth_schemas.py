@@ -21,6 +21,9 @@ def _reject_disposable_email(value: str) -> str:
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=72)
+    # Cloudflare Turnstile token from the widget. Optional so the field is inert
+    # when the gate is disabled; verified server-side when enabled.
+    turnstile_token: str | None = None
 
 
 class RefreshRequest(BaseModel):
@@ -45,6 +48,9 @@ class TokenResponse(BaseModel):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(max_length=72)
+    # Cloudflare Turnstile token from the widget. Optional so the field is inert
+    # when the gate is disabled; verified server-side (fail-closed) when enabled.
+    turnstile_token: str | None = None
 
     _validate_password = field_validator("password")(_enforce_password_policy)
     _validate_email = field_validator("email")(_reject_disposable_email)

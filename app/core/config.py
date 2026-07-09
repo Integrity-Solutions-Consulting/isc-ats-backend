@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     # default so a directly-exposed dev backend never trusts a client-set header.
     trust_proxy_headers: bool = False
 
+    # Cloudflare Turnstile — bot/abuse gate on register (fail-closed) and login
+    # (fail-open). Off by default so local dev and tests run without real keys.
+    # The secret key is verified server-side against siteverify; it must live in
+    # an env var (Dokploy), never in code. The site key is public and lives in the
+    # frontend (NEXT_PUBLIC_TURNSTILE_SITE_KEY).
+    turnstile_enabled: bool = False
+    turnstile_secret_key: str = ""
+    turnstile_verify_url: str = (
+        "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+    )
+
     # Background task queue + denylist store.
     # queue_backend: "inline" runs tasks in-process (no Redis — default, dev/test);
     # "arq" enqueues to Redis for a separate worker to execute (production).
@@ -143,6 +154,21 @@ class Settings(BaseSettings):
                 "minio_access_key / minio_secret_key must be changed from the default "
                 "'minioadmin' before running in production. Set MINIO_ACCESS_KEY and "
                 "MINIO_SECRET_KEY environment variables."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _require_turnstile_secret_when_enabled(self) -> "Settings":
+        """If Turnstile is switched on, it must have a secret key to verify with.
+
+        Enabling the gate without a secret would make every siteverify call fail,
+        silently blocking registration (fail-closed) — a misconfiguration we'd
+        rather catch at boot than in production.
+        """
+        if self.turnstile_enabled and not self.turnstile_secret_key:
+            raise ValueError(
+                "turnstile_secret_key is required when turnstile_enabled is true. "
+                "Set the TURNSTILE_SECRET_KEY environment variable."
             )
         return self
 

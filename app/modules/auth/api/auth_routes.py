@@ -41,11 +41,13 @@ from app.modules.auth.application.auth_service import (
     InvalidRefreshTokenError,
     InvalidTokenError,
     SamePasswordError,
+    TurnstileError,
 )
 from app.modules.auth.infrastructure.repository import (
     RefreshTokenRepository,
     UserRepository,
 )
+from app.modules.auth.infrastructure.turnstile_factory import build_turnstile_verifier
 from app.modules.comms.application.email_dispatch_service import EmailDispatchService
 from app.modules.comms.application.email_sender import EmailMessage
 from app.modules.comms.application.email_templates import (
@@ -200,6 +202,7 @@ def get_service(session: SessionDep, request: Request) -> AuthService:
         has_profile_checker=candidate_has_profile,
         token_denylist=request.app.state.token_denylist,
         login_throttle=request.app.state.login_throttle,
+        turnstile=build_turnstile_verifier(),
     )
 
 
@@ -228,7 +231,14 @@ async def login(
     request: Request,
 ) -> TokenResponse:
     try:
-        tokens = await service.login(data.email, data.password, _client_ip(request))
+        tokens = await service.login(
+            data.email,
+            data.password,
+            _client_ip(request),
+            turnstile_token=data.turnstile_token,
+        )
+    except TurnstileError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except AccountLockedError as exc:
         # Generic message + Retry-After. Locking applies uniformly to any email,
         # so this never reveals whether the account actually exists.
@@ -277,8 +287,15 @@ async def register(
     # a "you already have an account" email to the real owner.
     try:
         result = await service.register_candidate(
-            data.email, data.password, _client_ip(request)
+            data.email,
+            data.password,
+            _client_ip(request),
+            turnstile_token=data.turnstile_token,
         )
+    except TurnstileError as exc:
+        # A CAPTCHA failure is independent of whether the email exists, so it's
+        # safe (no enumeration) to surface it instead of the generic response.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except EmailAlreadyExistsError:
         await task_queue.enqueue("send_account_exists_email", data.email)
     else:
@@ -410,6 +427,7 @@ async def delete_me(
     if candidate is not None:
         await candidate_repo.deactivate_by_user_id(current_user.user_id)
         from sqlalchemy import update
+
         from app.modules.recruitment.infrastructure.application_models import Application
         stmt = (
             update(Application)

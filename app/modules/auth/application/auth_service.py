@@ -18,6 +18,7 @@ from app.core.security import (
 )
 from app.core.token_denylist import TokenDenylist
 from app.modules.auth.application.bootstrap_service import CANDIDATE_ROLE_NAME
+from app.modules.auth.application.turnstile import TurnstileOutcome, TurnstileVerifier
 from app.modules.auth.infrastructure.models import RefreshToken, Role, User, UserRole
 from app.modules.auth.infrastructure.repository import (
     RefreshTokenRepository,
@@ -52,6 +53,15 @@ class InvalidTokenError(AuthError):
 
 class SamePasswordError(AuthError):
     pass
+
+
+class TurnstileError(AuthError):
+    """The anti-bot (Turnstile) check did not pass.
+
+    Raised for a FAILED verdict on either flow, and additionally for an
+    UNAVAILABLE verdict on registration (fail-closed). Login treats UNAVAILABLE
+    as a pass (fail-open) and never raises this for an outage.
+    """
 
 
 @dataclass
@@ -106,6 +116,7 @@ class AuthService:
         has_profile_checker: ProfileChecker | None = None,
         token_denylist: TokenDenylist | None = None,
         login_throttle: LoginThrottle | None = None,
+        turnstile: TurnstileVerifier | None = None,
     ) -> None:
         self.users = users
         self.refresh_tokens = refresh_tokens
@@ -113,6 +124,33 @@ class AuthService:
         self.has_profile_checker = has_profile_checker
         self.token_denylist = token_denylist
         self.login_throttle = login_throttle
+        self.turnstile = turnstile
+
+    async def _check_turnstile(
+        self, token: str | None, ip: str | None, *, fail_closed: bool
+    ) -> None:
+        """Run the anti-bot gate, applying the flow's fail policy.
+
+        No verifier wired (feature off) → skip. FAILED always blocks. UNAVAILABLE
+        blocks only when `fail_closed` (registration); login passes it (fail-open)
+        so a Cloudflare outage never locks out legitimate users.
+        """
+        if self.turnstile is None:
+            return
+        outcome = await self.turnstile.verify(token, ip)
+        if outcome is TurnstileOutcome.SUCCESS:
+            return
+        if outcome is TurnstileOutcome.FAILED:
+            raise TurnstileError(
+                "No pudimos verificar que no seas un robot. "
+                "Recargá la página e intentá de nuevo."
+            )
+        # UNAVAILABLE
+        if fail_closed:
+            raise TurnstileError(
+                "No pudimos completar la verificación de seguridad. "
+                "Intentá nuevamente en unos minutos."
+            )
 
     async def _revoke_access_tokens(self, user_id: int) -> None:
         """Kill every access token the user currently holds (security fix 3.4).
@@ -125,7 +163,18 @@ class AuthService:
             ttl = settings.access_token_expire_minutes * 60 + 60  # + clock-skew buffer
             await self.token_denylist.revoke_user(user_id, ttl)
 
-    async def login(self, email: str, password: str, ip: str | None) -> AuthTokens:
+    async def login(
+        self,
+        email: str,
+        password: str,
+        ip: str | None,
+        turnstile_token: str | None = None,
+    ) -> AuthTokens:
+        # Anti-bot gate first — before any DB work or throttle bookkeeping. Login
+        # fails OPEN if Cloudflare is unreachable so an outage can't lock out real
+        # users; only a FAILED verdict blocks here.
+        await self._check_turnstile(turnstile_token, ip, fail_closed=False)
+
         # Account-level brute-force guard: refuse before touching the DB while the
         # account is locked. Checked for any email (existing or not) so the
         # behaviour can't be used to probe which emails are registered.
@@ -228,8 +277,16 @@ class AuthService:
         )
 
     async def register_candidate(
-        self, email: str, password: str, ip: str | None
+        self,
+        email: str,
+        password: str,
+        ip: str | None,
+        turnstile_token: str | None = None,
     ) -> RegistrationResult:
+        # Anti-bot gate first — registration is the abuse funnel, so it fails
+        # CLOSED: a FAILED verdict OR an unreachable Cloudflare both block.
+        await self._check_turnstile(turnstile_token, ip, fail_closed=True)
+
         # Look up by normalized email across ALL rows (get_by_email filters
         # is_active==True and would miss a deactivated account). An active row is a
         # real conflict; an inactive CANDIDATE row is a returning user, handled as
