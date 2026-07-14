@@ -328,6 +328,122 @@ async def test_confirm_double_booking_guard(session: AsyncSession) -> None:
         await _svc(session).confirm_slot_for_candidate(invite.id, cand_user.id, chosen)
 
 
+# ── confirm_slot_for_candidate — HR notification (D4) ──────────────────────────
+
+
+async def test_confirm_notifies_offer_creator(session: AsyncSession) -> None:
+    """D4: confirming a slot creates an in-app SYSTEM notification for the
+    offer's created_by (the HR user who created the invite), atomically with
+    the status change."""
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    invite = await _svc(session).create_invite(_slots_payload(app_, stage, interviewer), ACTOR)
+    confirmed = await _svc(session).confirm_slot_for_candidate(
+        invite.id, cand_user.id, invite.offered_slots[0]
+    )
+
+    notifs = (
+        await session.execute(
+            select(Notification).where(Notification.recipient_id == ACTOR.user_id)
+        )
+    ).scalars().all()
+    matches = [
+        n
+        for n in notifs
+        if n.related_entity_type == "interview" and n.related_entity_id == confirmed.id
+    ]
+    assert len(matches) == 1, "exactly one notification must be created for the offer creator"
+    assert matches[0].title == "Un candidato eligió su horario"
+    assert matches[0].created_by is None  # SYSTEM notification
+
+
+async def test_confirm_notification_falls_back_to_interviewer_when_created_by_is_null(
+    session: AsyncSession,
+) -> None:
+    """D4 fallback: legacy rows with created_by=None notify the interviewer instead."""
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    offered = await ParameterRepository(session).get_by_type_and_code(
+        "interview_status", "offered"
+    )
+    hr_sched = await ParameterRepository(session).get_by_type_and_code(
+        "interview_scheduler", "hr"
+    )
+    assert offered is not None
+    assert hr_sched is not None
+    base = _now() + timedelta(days=3)
+    slot = {"start": base.isoformat(), "end": (base + timedelta(hours=1)).isoformat()}
+    invite = await BaseRepository(session, Interview).add(
+        Interview(
+            application_id=app_.id,
+            process_stage_id=stage.id,
+            interviewer_id=interviewer.id,
+            status_id=offered.id,
+            scheduled_by_id=hr_sched.id,
+            offered_slots=[slot],
+            token_expires_at=_now() + timedelta(days=7),
+            created_by=None,  # legacy row — no offer creator recorded
+        )
+    )
+    confirmed = await _svc(session).confirm_slot_for_candidate(invite.id, cand_user.id, slot)
+
+    notifs = (
+        await session.execute(
+            select(Notification).where(Notification.recipient_id == interviewer.id)
+        )
+    ).scalars().all()
+    matches = [
+        n
+        for n in notifs
+        if n.related_entity_type == "interview" and n.related_entity_id == confirmed.id
+    ]
+    assert len(matches) == 1
+    assert matches[0].title == "Un candidato eligió su horario"
+
+
+async def test_confirm_notification_dedups_when_created_by_equals_interviewer(
+    session: AsyncSession,
+) -> None:
+    """D4 dedup: when the offer's creator IS the interviewer, confirm_slot_for_candidate
+    must NOT add a second notification for that same recipient here — the route-layer
+    background task (notify_slot_confirmed) already notifies the interviewer separately
+    on every confirm, so adding one at the service level too would double it up."""
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    offered = await ParameterRepository(session).get_by_type_and_code(
+        "interview_status", "offered"
+    )
+    hr_sched = await ParameterRepository(session).get_by_type_and_code(
+        "interview_scheduler", "hr"
+    )
+    assert offered is not None
+    assert hr_sched is not None
+    base = _now() + timedelta(days=3)
+    slot = {"start": base.isoformat(), "end": (base + timedelta(hours=1)).isoformat()}
+    invite = await BaseRepository(session, Interview).add(
+        Interview(
+            application_id=app_.id,
+            process_stage_id=stage.id,
+            interviewer_id=interviewer.id,
+            status_id=offered.id,
+            scheduled_by_id=hr_sched.id,
+            offered_slots=[slot],
+            token_expires_at=_now() + timedelta(days=7),
+            created_by=interviewer.id,  # creator IS the interviewer
+        )
+    )
+    confirmed = await _svc(session).confirm_slot_for_candidate(invite.id, cand_user.id, slot)
+
+    notifs = (
+        await session.execute(
+            select(Notification).where(Notification.recipient_id == interviewer.id)
+        )
+    ).scalars().all()
+    matches = [
+        n
+        for n in notifs
+        if n.related_entity_type == "interview" and n.related_entity_id == confirmed.id
+    ]
+    assert matches == []  # the service layer must not create a duplicate here
+
+
 # ── list_offers_for_candidate ─────────────────────────────────────────────────
 
 
@@ -512,6 +628,49 @@ async def test_http_confirm_own_offer(client: AsyncClient, session: AsyncSession
     response = await client.post(
         f"{ME_URL}/{invite.id}/confirm",
         json={"chosen_slot": invite.offered_slots[0]},
+        headers=_bearer(cand_user.id),
+    )
+    assert response.status_code == 200
+    assert response.json()["scheduled_at"] is not None
+
+
+async def test_http_confirm_still_succeeds_when_creator_is_interviewer(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """D4 dedup does not break the confirm flow itself when creator == interviewer.
+
+    (The full cross-session dedup between the service-level notification and the
+    notify_slot_confirmed background task — which opens its own DB session — is
+    covered at the service level by test_confirm_notification_dedups_when_created_by_equals_interviewer;
+    the background task itself is explicitly unchanged per design D4.)
+    """
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    offered = await ParameterRepository(session).get_by_type_and_code(
+        "interview_status", "offered"
+    )
+    hr_sched = await ParameterRepository(session).get_by_type_and_code(
+        "interview_scheduler", "hr"
+    )
+    assert offered is not None
+    assert hr_sched is not None
+    base = _now() + timedelta(days=3)
+    slot = {"start": base.isoformat(), "end": (base + timedelta(hours=1)).isoformat()}
+    invite = await BaseRepository(session, Interview).add(
+        Interview(
+            application_id=app_.id,
+            process_stage_id=stage.id,
+            interviewer_id=interviewer.id,
+            status_id=offered.id,
+            scheduled_by_id=hr_sched.id,
+            offered_slots=[slot],
+            token_expires_at=_now() + timedelta(days=7),
+            created_by=interviewer.id,  # creator IS the interviewer
+        )
+    )
+
+    response = await client.post(
+        f"{ME_URL}/{invite.id}/confirm",
+        json={"chosen_slot": slot},
         headers=_bearer(cand_user.id),
     )
     assert response.status_code == 200

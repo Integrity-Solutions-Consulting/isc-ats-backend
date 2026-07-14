@@ -368,7 +368,7 @@ class InterviewService:
                 "Parameter (interview_scheduler, candidate) not found — run seed migration"
             )
 
-        return await self.repository.update(
+        confirmed = await self.repository.update(
             interview,
             {
                 "scheduled_at": start,
@@ -377,6 +377,37 @@ class InterviewService:
                 "scheduled_by_id": candidate_param.id,
             },
         )
+
+        # D4: notify the offer's creator (HR) that the candidate picked a slot —
+        # atomically with the status change, same dual-channel pattern as
+        # create_invite (in-app here; the interviewer's own email + notification
+        # stays unchanged in the route-layer background task, notify_slot_confirmed).
+        #
+        # Fallback: when created_by is null (legacy rows), notify interviewer_id
+        # instead — someone must be told.
+        # Dedup: when the offer's recorded creator IS the interviewer, skip here —
+        # notify_slot_confirmed already notifies the interviewer on every confirm,
+        # so adding one here too would double it up for the same recipient. The
+        # fallback case above does NOT count as "creator == interviewer" — the
+        # creator is simply unknown, so the interviewer notification here is the
+        # only one that will ever be sent for that recipient.
+        creator_id = confirmed.created_by
+        if creator_id is not None and creator_id == confirmed.interviewer_id:
+            pass
+        else:
+            recipient_id = creator_id if creator_id is not None else confirmed.interviewer_id
+            session.add(
+                Notification(
+                    recipient_id=recipient_id,
+                    title="Un candidato eligió su horario",
+                    body="El candidato eligió un horario para su entrevista.",
+                    related_entity_type="interview",
+                    related_entity_id=confirmed.id,
+                    created_by=None,
+                )
+            )
+
+        return confirmed
 
     async def _candidate_user_id(self, application_id: int) -> int | None:
         """Resolve the user id that owns an application (its candidate's user)."""
