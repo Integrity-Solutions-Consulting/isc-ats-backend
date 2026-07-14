@@ -262,8 +262,8 @@ async def _send_random_password_email(to_email: str, password_raw: str) -> None:
     from app.core.database import async_session_factory
     from app.modules.comms.application.email_dispatch_service import EmailDispatchService
     from app.modules.comms.application.email_templates import render_random_password_email
-    from app.modules.comms.domain.models import EmailMessage
-    from app.modules.comms.infrastructure.mailgun import build_email_sender
+    from app.modules.comms.application.email_sender import EmailMessage
+    from app.modules.comms.infrastructure.email_sender_factory import build_email_sender
     import logging
 
     logger = logging.getLogger(__name__)
