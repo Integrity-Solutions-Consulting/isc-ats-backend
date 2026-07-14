@@ -41,8 +41,12 @@ STAFF_ONLY_PATHS = [
     "/1",  # full VacancyRead (client_company_id, contact_id)
     "/1/pipeline",  # every applicant's PII / salary / match score
     "/1/documents",  # every applicant's generated Word docs
-    "/1/generate-poster",
+    "/1/generate-poster",  # now a side-effecting POST (persists MinIO + File + VacancyPromoImage)
 ]
+
+# generate-poster became POST when it started persisting a VacancyPromoImage
+# (Task 1.1) — every other staff-only vacancy endpoint stays GET.
+_POST_PATHS = {"/1/generate-poster"}
 
 
 @pytest.fixture
@@ -63,11 +67,13 @@ def _bearer(user_id: int, portal: str) -> dict[str, str]:
 
 
 async def _candidate_with_vacancies_read(session: AsyncSession) -> int:
-    """Bootstrap RBAC + a candidate explicitly granted the coarse staff permission.
+    """Bootstrap RBAC + a candidate explicitly granted the coarse staff permissions.
 
-    Granting ``recruitment.vacancies.read`` to the candidate is the abuse case:
-    it makes ``require_permission`` pass so the test proves the PORTAL guard —
-    not the permission check — is what blocks the request.
+    Granting ``recruitment.vacancies.read`` and ``ai.vacancy_promo_images.create``
+    to the candidate is the abuse case: it makes ``require_permission`` pass on
+    every STAFF_ONLY_PATHS route (including POST /generate-poster) so the test
+    proves the PORTAL guard — not the permission check — is what blocks the
+    request.
     """
     await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
 
@@ -87,23 +93,30 @@ async def _candidate_with_vacancies_read(session: AsyncSession) -> int:
     ).scalar_one()
     await assign_role_to_user(session, cand.id, cand_role.id)
 
-    perm = (
-        await session.execute(
-            select(Permission).where(Permission.code == "recruitment.vacancies.read")
+    codes = ["recruitment.vacancies.read", "ai.vacancy_promo_images.create"]
+    perm_ids = (
+        (
+            await session.execute(
+                select(Permission.id).where(Permission.code.in_(codes))
+            )
         )
-    ).scalar_one()
-    # Idempotent: bootstrap already grants this code to the candidate role today,
-    # and after the least-privilege split it won't — either way the grant must be
-    # present so require_permission passes and the PORTAL guard is what's tested.
-    stmt = (
-        pg_insert(RolePermission)
-        .values(role_id=cand_role.id, permission_id=perm.id, is_active=True)
-        .on_conflict_do_update(
-            index_elements=[RolePermission.role_id, RolePermission.permission_id],
-            set_={"is_active": True},
-        )
+        .scalars()
+        .all()
     )
-    await session.execute(stmt)
+    # Idempotent: bootstrap already grants recruitment.vacancies.read to the
+    # candidate role today, and after the least-privilege split it won't —
+    # either way the grant must be present so require_permission passes and
+    # the PORTAL guard is what's tested.
+    for perm_id in perm_ids:
+        stmt = (
+            pg_insert(RolePermission)
+            .values(role_id=cand_role.id, permission_id=perm_id, is_active=True)
+            .on_conflict_do_update(
+                index_elements=[RolePermission.role_id, RolePermission.permission_id],
+                set_={"is_active": True},
+            )
+        )
+        await session.execute(stmt)
     await session.flush()
     return cand.id
 
@@ -113,7 +126,8 @@ async def test_candidate_forbidden_on_staff_vacancy_endpoints(
     client: AsyncClient, session: AsyncSession, path: str
 ) -> None:
     cand_id = await _candidate_with_vacancies_read(session)
-    res = await client.get(BASE + path, headers=_bearer(cand_id, portal="candidate"))
+    method = client.post if path in _POST_PATHS else client.get
+    res = await method(BASE + path, headers=_bearer(cand_id, portal="candidate"))
     assert res.status_code == 403, f"{path} leaked to candidate portal"
     assert "Staff-only" in res.json()["detail"]
 

@@ -1,13 +1,21 @@
-import io
 import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
 
+from app.core.config import settings
 from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.core.task_queue import TaskQueueDep, register_task
+from app.modules.ai.api.vacancy_promo_images_schemas import (
+    VacancyPromoImageCreate,
+    VacancyPromoImageRead,
+)
+from app.modules.ai.application.vacancy_promo_images_service import (
+    VacancyPromoImageReferenceError,
+    VacancyPromoImageService,
+)
+from app.modules.ai.infrastructure.models import VacancyPromoImage
 from app.modules.auth.api.authorization import (
     PermissionCodesDep,
     require_any_permission,
@@ -57,6 +65,10 @@ from app.modules.recruitment.infrastructure.pipeline_repository import (
 from app.modules.recruitment.infrastructure.vacancies_repository import (
     VacanciesExpandedRepository,
 )
+from app.modules.storage.api.files_schemas import FileCreate
+from app.modules.storage.application.files_service import FileService
+from app.modules.storage.infrastructure.minio_client import upload_file_to_minio
+from app.modules.storage.infrastructure.models import File as FileModel
 from app.shared.ownership import forbid_candidate_portal
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
@@ -385,21 +397,62 @@ async def get_vacancy_stages(vacancy_id: int, session: SessionDep) -> list[Vacan
     ]
 
 
-@router.get(
+@router.post(
     "/{vacancy_id}/generate-poster",
-    dependencies=[Depends(require_permission("recruitment.vacancies.read"))],
+    response_model=VacancyPromoImageRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("ai.vacancy_promo_images.create"))],
 )
-async def generate_poster(vacancy_id: int, current_user: CurrentUserDep) -> StreamingResponse:
+async def generate_poster(
+    vacancy_id: int, session: SessionDep, current_user: CurrentUserDep
+) -> VacancyPromoImageRead:
+    """Generate an AI hiring poster for the vacancy, persist it (MinIO + File +
+    VacancyPromoImage), and return the created promo-image record.
+
+    The actual PNG bytes are NOT returned here — the frontend fetches them
+    separately via the generic file-download proxy (GET /files/{file_id}/download)
+    using the file_id in the response.
+    """
     forbid_candidate_portal(current_user)
     try:
         image_bytes = await generate_vacancy_poster(vacancy_id)
     except ValueError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-    return StreamingResponse(
-        io.BytesIO(image_bytes),
-        media_type="image/png",
-        headers={"Content-Disposition": f'attachment; filename="poster_{vacancy_id}.png"'},
+
+    stored_key = upload_file_to_minio(
+        file_data=image_bytes,
+        file_name=f"poster_{vacancy_id}.png",
+        content_type="image/png",
     )
+    file_service = FileService(BaseRepository(session, FileModel))
+    file_record = await file_service.create(
+        FileCreate(
+            original_name=f"poster_{vacancy_id}.png",
+            stored_key=stored_key,
+            bucket=settings.minio_bucket,
+            mime_type="image/png",
+            size_bytes=len(image_bytes),
+            is_public=False,
+            entity_type="vacancy_image",
+            entity_id=vacancy_id,
+        ),
+        current_user,
+        trusted=True,
+    )
+
+    promo_service = VacancyPromoImageService(
+        BaseRepository(session, VacancyPromoImage),
+        BaseRepository(session, Vacancy),
+        BaseRepository(session, FileModel),
+    )
+    try:
+        created = await promo_service.create(
+            VacancyPromoImageCreate(vacancy_id=vacancy_id, file_id=file_record.id),
+            current_user,
+        )
+    except VacancyPromoImageReferenceError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return VacancyPromoImageRead.model_validate(created)
 
 
 @router.get(

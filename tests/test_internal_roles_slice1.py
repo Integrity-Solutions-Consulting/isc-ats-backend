@@ -270,6 +270,10 @@ def test_talento_humano_permission_codes_exact_set() -> None:
             "storage.files.create",
             # comms
             "comms.notifications.read",
+            # ai — full CRUD on AI-generated vacancy promo images
+            "ai.vacancy_promo_images.read",
+            "ai.vacancy_promo_images.create",
+            "ai.vacancy_promo_images.delete",
         }
     )
     assert TALENTO_HUMANO_PERMISSION_CODES == expected
@@ -295,14 +299,20 @@ def test_talento_humano_departments_and_client_companies_read_only() -> None:
     )
 
 
-def test_talento_humano_no_ai_permissions() -> None:
-    """TH must NOT have any ai.* permissions per design #388."""
+def test_talento_humano_ai_permissions_limited_to_vacancy_promo_images() -> None:
+    """TH holds exactly ai.vacancy_promo_images.* (full CRUD) and no other ai.*
+    permission — it manages the vacancy's public presentation end to end, but
+    nothing else in the ai bounded context (e.g. cv_parse_jobs, ai_usage_logs)."""
     from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
         TALENTO_HUMANO_PERMISSION_CODES,
     )
 
     ai_codes = {c for c in TALENTO_HUMANO_PERMISSION_CODES if c.startswith("ai.")}
-    assert not ai_codes, f"TH must not hold ai.* permissions: {ai_codes}"
+    assert ai_codes == {
+        "ai.vacancy_promo_images.read",
+        "ai.vacancy_promo_images.create",
+        "ai.vacancy_promo_images.delete",
+    }, f"TH must hold exactly ai.vacancy_promo_images.* CRUD, nothing else: {ai_codes}"
 
 
 def test_talento_humano_no_profile_template_permissions() -> None:
@@ -478,6 +488,8 @@ def test_comercial_permission_codes_exact_set() -> None:
             "storage.files.create",
             # comms
             "comms.notifications.read",
+            # ai — read-only (TH owns create/delete)
+            "ai.vacancy_promo_images.read",
         }
     )
     assert COMERCIAL_PERMISSION_CODES == expected
@@ -508,14 +520,17 @@ def test_comercial_no_processes_or_process_stages() -> None:
     assert not forbidden, f"Comercial must not hold process/stage permissions: {forbidden}"
 
 
-def test_comercial_no_ai_permissions() -> None:
-    """Comercial must NOT have any ai.* permissions per design #388."""
+def test_comercial_ai_permissions_read_only() -> None:
+    """Comercial holds exactly ai.vacancy_promo_images.read — no create/delete
+    (TH owns generating and removing posters) and no other ai.* permission."""
     from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
         COMERCIAL_PERMISSION_CODES,
     )
 
     ai_codes = {c for c in COMERCIAL_PERMISSION_CODES if c.startswith("ai.")}
-    assert not ai_codes, f"Comercial must not hold ai.* permissions: {ai_codes}"
+    assert ai_codes == {"ai.vacancy_promo_images.read"}, (
+        f"Comercial must hold exactly ai.vacancy_promo_images.read, nothing else: {ai_codes}"
+    )
 
 
 def test_comercial_pipeline_write_absent() -> None:

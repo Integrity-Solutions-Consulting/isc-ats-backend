@@ -59,13 +59,14 @@ CANDIDATE_PERMISSION_CODES: frozenset[str] = frozenset(
 # create/update/delete to stage/stage_status — see auth.role_parameter_type_grants).
 # Read-only on org.departments, org.client_companies and org.contacts — needed to
 # populate filters and to see who to coordinate with, but TH does not manage those
-# catalogs (no create/update/delete). No ai.* — outside TH's operational scope per
-# design #388.
+# catalogs (no create/update/delete).
 # recruitment.vacancies.create is intentionally NOT granted — TH never creates a new
 # vacancy from scratch, it only updates/publishes an existing "solicitud"-status vacancy
 # created by Comercial/Proyecto. Profile templates (org.profile_templates.*,
 # org.profile_template_items.*) are owned exclusively by Comercial/Proyecto and are
 # intentionally NOT granted to TH either.
+# ai.vacancy_promo_images.* (full CRUD) — TH manages the vacancy's public
+# presentation end to end: generating, listing and removing AI hiring posters.
 TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
     {
         # recruitment — full pipeline management (update/publish, not create)
@@ -117,6 +118,10 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
         "storage.files.create",
         # comms
         "comms.notifications.read",
+        # ai — full CRUD on AI-generated vacancy promo images (see comment above)
+        "ai.vacancy_promo_images.read",
+        "ai.vacancy_promo_images.create",
+        "ai.vacancy_promo_images.delete",
     }
 )
 
@@ -129,7 +134,9 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
 # items (they own candidate profile authoring). Read-only on org.departments and
 # org.client_companies — needed to populate the vacancy-creation form's cliente/
 # departamento fields and the vacancies list filters; they don't manage those
-# catalogs. No org.processes/process_stages (TH owns those). No ai.* permissions.
+# catalogs. No org.processes/process_stages (TH owns those). ai.vacancy_promo_images
+# is READ-ONLY here — Comercial/Proyecto may view generated posters but only TH may
+# generate (create) or remove (delete) them.
 COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
     {
         # recruitment — vacancy read+create only; full pipeline read; no write on pipeline
@@ -165,6 +172,8 @@ COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
         "storage.files.create",
         # comms
         "comms.notifications.read",
+        # ai — read-only (see comment above; TH owns create/delete)
+        "ai.vacancy_promo_images.read",
     }
 )
 
