@@ -47,9 +47,12 @@ async def list_contacts(
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
     client_company_id: Annotated[int | None, Query(description="Filter by company")] = None,
+    include_inactive: Annotated[bool, Query()] = False,
 ) -> Page[ContactRead]:
     params = PageParams(page=page, size=size)
-    items, total = await service.list(params, client_company_id=client_company_id)
+    items, total = await service.list(
+        params, client_company_id=client_company_id, include_inactive=include_inactive
+    )
     return Page.create([ContactRead.model_validate(i) for i in items], total, params)
 
 

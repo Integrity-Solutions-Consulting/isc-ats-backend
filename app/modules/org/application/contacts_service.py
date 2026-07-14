@@ -36,10 +36,16 @@ class ContactService:
         self.in_use_checker = in_use_checker
 
     async def list(
-        self, params: PageParams, *, client_company_id: int | None = None
+        self,
+        params: PageParams,
+        *,
+        client_company_id: int | None = None,
+        include_inactive: bool = False,
     ) -> tuple[list[Contact], int]:
         filters = {"client_company_id": client_company_id} if client_company_id else None
-        return await self.repository.list(params, filters=filters)
+        return await self.repository.list(
+            params, filters=filters, include_inactive=include_inactive
+        )
 
     async def get(self, contact_id: int) -> Contact:
         contact = await self.repository.get(contact_id)

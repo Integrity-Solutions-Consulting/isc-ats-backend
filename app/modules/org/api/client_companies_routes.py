@@ -51,9 +51,10 @@ async def list_client_companies(
     service: ServiceDep,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
+    include_inactive: Annotated[bool, Query()] = False,
 ) -> Page[ClientCompanyRead]:
     params = PageParams(page=page, size=size)
-    items, total = await service.list(params)
+    items, total = await service.list(params, include_inactive=include_inactive)
     return Page.create([ClientCompanyRead.model_validate(i) for i in items], total, params)
 
 
