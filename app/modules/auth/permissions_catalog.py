@@ -85,6 +85,14 @@ PERMISSION_CATALOG: tuple[PermissionSpec, ...] = (
     *_specs("recruitment", "application_documents", "application documents", _CRUD),
     *_specs("recruitment", "application_notes", "application notes", _CRUD),
     *_specs("recruitment", "interviews", "interviews", _CRUD),
+    # Dedicated read for the "today/tomorrow" agenda widget (Admin + Talento
+    # Humano only). recruitment.interviews.read is ALSO held by Comercial/Proyecto
+    # (see bootstrap_service.py), so it cannot gate an Admin+TH-only surface.
+    PermissionSpec(
+        code="recruitment.interviews.read_agenda",
+        name="View interview agenda",
+        module="recruitment",
+    ),
     *_specs(
         "recruitment", "interviewer_availability", "interviewer availability", _CRUD
     ),

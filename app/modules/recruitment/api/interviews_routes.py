@@ -1,5 +1,5 @@
 import logging
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,6 +27,7 @@ from app.modules.comms.infrastructure.models import Notification
 from app.modules.org.infrastructure.models import Parameter, ProcessStage
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.interviews_schemas import (
+    AgendaInterviewRead,
     InterviewCreate,
     InterviewerRead,
     InterviewInviteCreate,
@@ -46,6 +47,7 @@ from app.modules.recruitment.application.interviews_service import (
     InterviewService,
     InterviewValidationError,
 )
+from app.modules.recruitment.application.slot_generation_service import EC_TZ
 from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.recruitment.infrastructure.interview_models import (
@@ -404,6 +406,73 @@ async def get_interviewers(slots_service: SlotServiceDep) -> list[InterviewerRea
     """Return users that have at least one active availability window."""
     users = await slots_service.get_interviewers()
     return [InterviewerRead.model_validate(u) for u in users]
+
+
+# ── Agenda widget (D5) — "Reuniones de hoy y mañana" ──────────────────────────
+
+
+@router.get(
+    "/agenda",
+    response_model=list[AgendaInterviewRead],
+    dependencies=[Depends(require_permission("recruitment.interviews.read_agenda"))],
+)
+async def get_agenda(session: SessionDep) -> list[AgendaInterviewRead]:
+    """ALL scheduled interviews (any interviewer) for today + tomorrow.
+
+    Gated by recruitment.interviews.read_agenda — a dedicated, Admin+Talento
+    Humano-only permission (R6). recruitment.interviews.read is intentionally
+    NOT reused here because Comercial/Proyecto also hold it (see
+    bootstrap_service.py) and must not see this cross-owner surface.
+
+    The [today, tomorrow] boundary is computed server-side in Ecuador local
+    time and converted to UTC — never derived from the caller's browser
+    timezone (R5/D5).
+    """
+    now_ec = datetime.now(UTC).astimezone(EC_TZ)
+    start_local = datetime(now_ec.year, now_ec.month, now_ec.day, tzinfo=EC_TZ)
+    start = start_local.astimezone(UTC)
+    end = (start_local + timedelta(days=2)).astimezone(UTC)
+
+    param_repo = ParameterRepository(session)
+    cancelled_param = await param_repo.get_by_type_and_code("interview_status", "cancelled")
+    cancelled_id: int | None = cancelled_param.id if cancelled_param is not None else None
+
+    stmt = (
+        select(Interview, Candidate.first_name, Candidate.last_name, Parameter.name, User.email)
+        .join(Application, Application.id == Interview.application_id)
+        .join(Candidate, Candidate.id == Application.candidate_id)
+        .join(Vacancy, Vacancy.id == Application.vacancy_id)
+        .join(Parameter, Parameter.id == Vacancy.vacancy_name_id)
+        .join(User, User.id == Interview.interviewer_id)
+        .where(Interview.is_active.is_(True))
+        .where(Interview.scheduled_at.is_not(None))
+        .where(Interview.scheduled_at >= start)
+        .where(Interview.scheduled_at < end)
+        .order_by(Interview.scheduled_at)
+    )
+    if cancelled_id is not None:
+        stmt = stmt.where(Interview.status_id != cancelled_id)
+
+    rows = (await session.execute(stmt)).all()
+
+    result: list[AgendaInterviewRead] = []
+    for interview, candidate_first, candidate_last, vacancy_name, interviewer_email in rows:
+        assert interview.scheduled_at is not None  # narrowed by the WHERE clause above
+        local_dt = interview.scheduled_at.astimezone(EC_TZ)
+        day = "today" if local_dt.date() == start_local.date() else "tomorrow"
+        result.append(
+            AgendaInterviewRead(
+                id=interview.id,
+                scheduled_at=interview.scheduled_at,
+                ends_at=interview.ends_at,
+                candidate_name=f"{candidate_first} {candidate_last}".strip(),
+                vacancy_name=vacancy_name,
+                interviewer_email=interviewer_email,
+                teams_meeting_url=interview.teams_meeting_url,
+                day=day,
+            )
+        )
+    return result
 
 
 # ── Mode B — invite + in-account candidate endpoints ──────────────────────────

@@ -243,6 +243,7 @@ def test_talento_humano_permission_codes_exact_set() -> None:
             "recruitment.interviews.create",
             "recruitment.interviews.update",
             "recruitment.interviews.delete",
+            "recruitment.interviews.read_agenda",
             # org — processes; parameters read+create+update; read-only on
             # departments/client_companies/contacts
             "org.departments.read",

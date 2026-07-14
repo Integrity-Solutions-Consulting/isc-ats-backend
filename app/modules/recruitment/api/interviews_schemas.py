@@ -100,3 +100,24 @@ class SlotConfirmRequest(BaseModel):
     chosen_slot: dict[str, Any] = Field(
         description="Must match one entry in offered_slots exactly"
     )
+
+
+# ── Agenda widget (D5) — "Reuniones de hoy y mañana" ──────────────────────────
+
+
+class AgendaInterviewRead(BaseModel):
+    """A single scheduled interview enriched for the today/tomorrow agenda widget.
+
+    Returned by GET /interviews/agenda, gated by recruitment.interviews.read_agenda
+    (Admin + Talento Humano only). `day` buckets the entry relative to the Ecuador
+    local calendar day, computed server-side.
+    """
+
+    id: int
+    scheduled_at: datetime
+    ends_at: datetime | None = None
+    candidate_name: str
+    vacancy_name: str
+    interviewer_email: str
+    teams_meeting_url: str | None = None
+    day: str = Field(description='"today" or "tomorrow" (Ecuador local calendar day)')

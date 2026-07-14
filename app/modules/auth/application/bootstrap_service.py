@@ -89,6 +89,9 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
         "recruitment.interviews.create",
         "recruitment.interviews.update",
         "recruitment.interviews.delete",
+        # Dedicated read for the "today/tomorrow" agenda widget — Admin + TH only
+        # (Comercial/Proyecto intentionally excluded; see permissions_catalog.py).
+        "recruitment.interviews.read_agenda",
         # org — process/stage configuration; read-only on departments/clients/contacts
         "org.departments.read",
         "org.client_companies.read",
