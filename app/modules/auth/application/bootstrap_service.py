@@ -120,9 +120,13 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
 # Internal staff roles — Comercial and Proyecto share an identical allowlist.
 # Comercial manages client-side vacancy sourcing; Proyecto manages delivery execution.
 # Both roles: create vacancies (but cannot update/delete/publish — TH owns lifecycle),
-# read-only pipeline access (applications/notes/interviews/documents), read-only talent pool,
-# and full CRUD on profile templates and items (they own candidate profile authoring).
-# No org.processes/process_stages (TH owns those). No ai.* permissions.
+# read-only pipeline access (applications/notes/interviews/documents), full CRUD on
+# the talent pool (they review CVs from other vacancies' applicants to reach out for
+# openings the candidate never applied to), and full CRUD on profile templates and
+# items (they own candidate profile authoring). Read-only on org.departments and
+# org.client_companies — needed to populate the vacancy-creation form's cliente/
+# departamento fields and the vacancies list filters; they don't manage those
+# catalogs. No org.processes/process_stages (TH owns those). No ai.* permissions.
 COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
     {
         # recruitment — vacancy read+create only; full pipeline read; no write on pipeline
@@ -133,7 +137,10 @@ COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
         "recruitment.application_notes.read",
         "recruitment.application_documents.read",
         "recruitment.interviews.read",
-        # org — contacts read; full CRUD on profile templates/items; parameters read+create+update
+        # org — departments/clients read-only; contacts read; full CRUD on profile
+        # templates/items; parameters read+create+update
+        "org.departments.read",
+        "org.client_companies.read",
         "org.contacts.read",
         "org.profile_templates.read",
         "org.profile_templates.create",
@@ -146,8 +153,10 @@ COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
         "org.parameters.read",
         "org.parameters.create",
         "org.parameters.update",
-        # talent — read only
+        # talent — full CRUD
         "talent.talent_pool.read",
+        "talent.talent_pool.create",
+        "talent.talent_pool.delete",
         # storage
         "storage.files.read",
         "storage.files.create",

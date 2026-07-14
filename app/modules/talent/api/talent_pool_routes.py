@@ -42,12 +42,14 @@ async def list_talent_pool(
     size: Annotated[int, Query(ge=1, le=100)] = 20,
     candidate_id: Annotated[int | None, Query()] = None,
     source_vacancy_id: Annotated[int | None, Query()] = None,
+    include_inactive: Annotated[bool, Query()] = False,
 ) -> Page[TalentPoolRead]:
     params = PageParams(page=page, size=size)
     items, total = await service.list(
         params,
         candidate_id=candidate_id,
         source_vacancy_id=source_vacancy_id,
+        include_inactive=include_inactive,
     )
     return Page.create([TalentPoolRead.model_validate(i) for i in items], total, params)
 

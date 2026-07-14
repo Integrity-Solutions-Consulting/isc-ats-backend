@@ -36,6 +36,7 @@ class TalentPoolService:
         *,
         candidate_id: int | None = None,
         source_vacancy_id: int | None = None,
+        include_inactive: bool = False,
     ) -> tuple[list[TalentPool], int]:
         filters = {
             k: v
@@ -45,7 +46,9 @@ class TalentPoolService:
             }.items()
             if v is not None
         }
-        return await self.repository.list(params, filters=filters or None)
+        return await self.repository.list(
+            params, filters=filters or None, include_inactive=include_inactive
+        )
 
     async def get(self, entry_id: int) -> TalentPool:
         entry = await self.repository.get(entry_id)

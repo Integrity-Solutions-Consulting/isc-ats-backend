@@ -452,7 +452,10 @@ def test_comercial_permission_codes_exact_set() -> None:
             "recruitment.application_notes.read",
             "recruitment.application_documents.read",
             "recruitment.interviews.read",
-            # org — contacts read; profile templates/items full CRUD; parameters read+create+update
+            # org — departments/clients read-only; contacts read; profile
+            # templates/items full CRUD; parameters read+create+update
+            "org.departments.read",
+            "org.client_companies.read",
             "org.contacts.read",
             "org.profile_templates.read",
             "org.profile_templates.create",
@@ -465,8 +468,10 @@ def test_comercial_permission_codes_exact_set() -> None:
             "org.parameters.read",
             "org.parameters.create",
             "org.parameters.update",
-            # talent — read only
+            # talent — full CRUD
             "talent.talent_pool.read",
+            "talent.talent_pool.create",
+            "talent.talent_pool.delete",
             # storage
             "storage.files.read",
             "storage.files.create",
@@ -527,18 +532,20 @@ def test_comercial_pipeline_write_absent() -> None:
     assert not pipeline_write, f"Comercial must not hold pipeline write codes: {pipeline_write}"
 
 
-def test_comercial_talent_pool_read_only() -> None:
-    """Comercial talent_pool access is read-only — no create or delete."""
+def test_comercial_talent_pool_full_crud() -> None:
+    """Comercial has full talent_pool CRUD — they review other vacancies'
+    applicants' CVs and add/remove them from the pool for future openings."""
     from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
         COMERCIAL_PERMISSION_CODES,
     )
 
-    forbidden = {
+    required = {
+        "talent.talent_pool.read",
         "talent.talent_pool.create",
         "talent.talent_pool.delete",
     }
-    violations = forbidden & COMERCIAL_PERMISSION_CODES
-    assert not violations, f"Comercial must not hold talent pool write codes: {violations}"
+    missing = required - COMERCIAL_PERMISSION_CODES
+    assert not missing, f"Comercial must hold full talent pool CRUD: missing {missing}"
 
 
 async def test_bootstrap_creates_comercial_role_with_correct_grants(
