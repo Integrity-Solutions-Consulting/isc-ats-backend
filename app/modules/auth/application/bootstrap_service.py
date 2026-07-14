@@ -78,7 +78,6 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
         "recruitment.candidates.update",
         "recruitment.candidates.delete",
         "recruitment.applications.read",
-        "recruitment.applications.create",
         "recruitment.applications.update",
         "recruitment.applications.delete",
         "recruitment.application_notes.read",

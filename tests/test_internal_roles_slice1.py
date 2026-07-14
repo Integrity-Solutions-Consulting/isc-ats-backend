@@ -232,7 +232,6 @@ def test_talento_humano_permission_codes_exact_set() -> None:
             "recruitment.candidates.update",
             "recruitment.candidates.delete",
             "recruitment.applications.read",
-            "recruitment.applications.create",
             "recruitment.applications.update",
             "recruitment.applications.delete",
             "recruitment.application_notes.read",
