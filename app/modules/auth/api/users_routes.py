@@ -60,6 +60,21 @@ class UserCreate(BaseModel):
 router = APIRouter(prefix="/users", tags=["auth · users"])
 
 
+def _generate_random_password() -> str:
+    """A secure random password satisfying the policy: min 12 chars, 3 each of
+    lowercase/uppercase/digit/special."""
+    import secrets
+    import string
+
+    lower = "".join(secrets.choice(string.ascii_lowercase) for _ in range(3))
+    upper = "".join(secrets.choice(string.ascii_uppercase) for _ in range(3))
+    digits = "".join(secrets.choice(string.digits) for _ in range(3))
+    special = "".join(secrets.choice("!@#$%^&*()-_=+") for _ in range(3))
+    all_chars = list(lower + upper + digits + special)
+    secrets.SystemRandom().shuffle(all_chars)
+    return "".join(all_chars)
+
+
 async def _fetch_roles_by_user_ids(
     session, user_ids: list[int]
 ) -> dict[int, list[str]]:
@@ -129,20 +144,9 @@ async def create_user(
     If the password is not provided, a random secure password will be generated
     and sent to the user via email.
     """
-    import secrets
-    import string
-
     password_raw = data.password
     if password_raw is None:
-        # Generate a secure random password satisfying the policy:
-        # Min 12 chars: 3 lowercase, 3 uppercase, 3 digits, 3 special.
-        lower = "".join(secrets.choice(string.ascii_lowercase) for _ in range(3))
-        upper = "".join(secrets.choice(string.ascii_uppercase) for _ in range(3))
-        digits = "".join(secrets.choice(string.digits) for _ in range(3))
-        special = "".join(secrets.choice("!@#$%^&*()-_=+") for _ in range(3))
-        all_chars = list(lower + upper + digits + special)
-        secrets.SystemRandom().shuffle(all_chars)
-        password_raw = "".join(all_chars)
+        password_raw = _generate_random_password()
 
     # Ensure the target role exists and is active.
     role = (
@@ -219,6 +223,7 @@ async def update_user_status(
     session: SessionDep,
     current_user: CurrentUserDep,
     request: Request,
+    task_queue: TaskQueueDep,
 ) -> UserRead:
     # Self-deactivation guard
     if not data.is_active and user_id == current_user.user_id:
@@ -233,12 +238,28 @@ async def update_user_status(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found")
 
+    # A reactivation resends the welcome email ONLY when this user never made it
+    # past their original invite (never logged in, still on the must-change
+    # temp password) — e.g. created, the welcome email never arrived, then
+    # deactivated instead of deleted. Reactivating someone who already has real
+    # credentials (was deactivated for an unrelated reason, e.g. leave) must
+    # NOT overwrite their password or blast them a "temp password" email.
+    resend_welcome_email = (
+        data.is_active
+        and not user.is_active
+        and user.must_change_password
+        and user.last_login_at is None
+    )
+    new_password_raw = _generate_random_password() if resend_welcome_email else None
+
     repo = UserRepository(session)
     changes: dict = {
         "is_active": data.is_active,
         "updated_by": current_user.user_id,
         "ip_updated": current_user.ip,
     }
+    if new_password_raw is not None:
+        changes["password_hash"] = hash_password(new_password_raw)
     user = await repo.update(user, changes)
 
     # Deactivation must end all live sessions, not just flip the flag — otherwise
@@ -251,6 +272,10 @@ async def update_user_status(
         if token_denylist is not None:
             ttl = settings.access_token_expire_minutes * 60 + 60  # + clock-skew buffer
             await token_denylist.revoke_user(user_id, ttl)
+
+    if new_password_raw is not None:
+        # Must be awaited — see create_user's identical note on enqueue.
+        await task_queue.enqueue("send_random_password_email", user.email, new_password_raw)
 
     roles_map = await _fetch_roles_by_user_ids(session, [user.id])
     ur = UserRead.model_validate(user)

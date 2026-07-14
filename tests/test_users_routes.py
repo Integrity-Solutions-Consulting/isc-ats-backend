@@ -464,6 +464,98 @@ async def test_patch_deactivation_revokes_refresh_tokens(
     assert active == []
 
 
+async def test_patch_reactivation_resends_welcome_email_if_never_logged_in(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Reactivating a user who never logged in (still on their original,
+    possibly-never-received temp password) generates a fresh password and
+    resends the welcome email — the original invite may never have arrived."""
+
+    class _RecordingTaskQueue:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def enqueue(self, task_name: str, *args: object) -> None:
+            self.calls.append((task_name, args))
+
+    admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
+    portal_id = await _staff_portal_id(session)
+    target = await UserRepository(session).add(
+        User(
+            email=f"{uuid.uuid4().hex[:12]}@test.local",
+            portal_id=portal_id,
+            is_active=False,
+            must_change_password=True,
+            last_login_at=None,
+        )
+    )
+    original_hash = target.password_hash
+
+    recorder = _RecordingTaskQueue()
+    app.state.task_queue = recorder
+
+    response = await client.patch(
+        f"{USERS_URL}/{target.id}",
+        json={"is_active": True},
+        headers=_bearer(admin.user_id),
+    )
+    assert response.status_code == 200
+
+    assert any(
+        name == "send_random_password_email" and args[0] == target.email
+        for name, args in recorder.calls
+    ), "welcome email must be resent when reactivating a never-logged-in user"
+
+    await session.refresh(target)
+    assert target.password_hash != original_hash
+
+
+async def test_patch_reactivation_does_not_resend_email_if_already_used(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Reactivating a user who already logged in before must NOT overwrite
+    their real password or resend a temp-password email."""
+
+    class _RecordingTaskQueue:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def enqueue(self, task_name: str, *args: object) -> None:
+            self.calls.append((task_name, args))
+
+    from datetime import UTC, datetime
+
+    admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
+    portal_id = await _staff_portal_id(session)
+    target = await UserRepository(session).add(
+        User(
+            email=f"{uuid.uuid4().hex[:12]}@test.local",
+            portal_id=portal_id,
+            is_active=False,
+            must_change_password=False,
+            last_login_at=datetime.now(UTC),
+        )
+    )
+    original_hash = target.password_hash
+
+    recorder = _RecordingTaskQueue()
+    app.state.task_queue = recorder
+
+    response = await client.patch(
+        f"{USERS_URL}/{target.id}",
+        json={"is_active": True},
+        headers=_bearer(admin.user_id),
+    )
+    assert response.status_code == 200
+
+    assert not any(
+        name == "send_random_password_email" for name, _args in recorder.calls
+    ), "reactivating an already-onboarded user must not resend a temp-password email"
+
+    await session.refresh(target)
+    assert target.password_hash == original_hash
+
+
 async def test_create_user_rejects_invalid_role(
     client: AsyncClient, session: AsyncSession
 ) -> None:
