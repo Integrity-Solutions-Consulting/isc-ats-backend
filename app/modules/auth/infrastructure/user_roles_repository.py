@@ -43,6 +43,16 @@ class UserRoleRepository:
         link.is_active = False
         await self.session.flush()
 
+    async def list_active_links_for_user(self, user_id: int) -> list[UserRole]:
+        """Active UserRole link rows (not resolved Role objects) — needed to
+        soft-delete them individually, e.g. when replacing a user's role."""
+        stmt = (
+            select(UserRole)
+            .where(UserRole.user_id == user_id)
+            .where(UserRole.is_active.is_(True))
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
     async def list_roles_for_user(self, user_id: int) -> list[Role]:
         stmt = (
             select(Role)

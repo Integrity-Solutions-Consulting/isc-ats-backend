@@ -95,3 +95,62 @@ async def test_revoke_missing_assignment_raises(session: AsyncSession) -> None:
     role = await _make_role(session)
     with pytest.raises(RoleAssignmentNotFoundError):
         await service.revoke(user.id, role.id)
+
+
+async def test_replace_role_switches_to_the_new_role_only(session: AsyncSession) -> None:
+    """The 'editar rol' action: user has role A, gets moved to role B — must end
+    up with EXACTLY role B, not both."""
+    service = _service(session)
+    user = await _make_user(session)
+    role_a = await _make_role(session)
+    role_b = await _make_role(session)
+    await service.assign(user.id, role_a.id, ACTOR)
+
+    replaced = await service.replace_role(user.id, role_b.id, ACTOR)
+
+    assert replaced.id == role_b.id
+    assert {r.id for r in await service.list_roles(user.id)} == {role_b.id}
+
+
+async def test_replace_role_with_the_same_role_is_a_noop(session: AsyncSession) -> None:
+    """Re-'editing' to the role the user already has must succeed, not conflict
+    (unlike assign(), which rejects a duplicate active assignment)."""
+    service = _service(session)
+    user = await _make_user(session)
+    role = await _make_role(session)
+    await service.assign(user.id, role.id, ACTOR)
+
+    replaced = await service.replace_role(user.id, role.id, ACTOR)
+
+    assert replaced.id == role.id
+    assert {r.id for r in await service.list_roles(user.id)} == {role.id}
+
+
+async def test_replace_role_reactivates_a_previously_revoked_role(
+    session: AsyncSession,
+) -> None:
+    """Switching back to a role the user held before (now revoked) must
+    reactivate that same row, not insert a duplicate composite-key PK."""
+    service = _service(session)
+    user = await _make_user(session)
+    role_a = await _make_role(session)
+    role_b = await _make_role(session)
+    await service.assign(user.id, role_b.id, ACTOR)
+    await service.replace_role(user.id, role_a.id, ACTOR)  # revokes B, assigns A
+
+    replaced = await service.replace_role(user.id, role_b.id, ACTOR)  # back to B
+
+    assert replaced.id == role_b.id
+    assert {r.id for r in await service.list_roles(user.id)} == {role_b.id}
+
+
+async def test_replace_role_unknown_user_raises(session: AsyncSession) -> None:
+    role = await _make_role(session)
+    with pytest.raises(UserNotFoundError):
+        await _service(session).replace_role(999999, role.id, ACTOR)
+
+
+async def test_replace_role_unknown_role_raises(session: AsyncSession) -> None:
+    user = await _make_user(session)
+    with pytest.raises(RoleNotFoundError):
+        await _service(session).replace_role(user.id, 999999, ACTOR)

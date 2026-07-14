@@ -76,3 +76,32 @@ async def revoke_user_role(user_id: int, role_id: int, service: ServiceDep) -> N
         await service.revoke(user_id, role_id)
     except RoleAssignmentNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+
+@router.put(
+    "/{user_id}/role",
+    response_model=RoleRead,
+    dependencies=[
+        Depends(require_permission("auth.user_roles.assign")),
+        Depends(require_permission("auth.user_roles.revoke")),
+    ],
+)
+async def replace_user_role(
+    user_id: int,
+    data: RoleAssignment,
+    service: ServiceDep,
+    current_user: CurrentUserDep,
+) -> RoleRead:
+    """Replace a user's role entirely — the "editar rol" action from Usuarios.
+
+    Revokes every role the user currently holds and assigns the new one, so
+    their permissions and visible screens update immediately on next login/
+    token refresh. Singular "/role" (vs the plural "/roles" collection above)
+    signals single-role-per-user semantics, matching how the Usuarios screen
+    only ever shows/edits one role per user.
+    """
+    try:
+        role = await service.replace_role(user_id, data.role_id, current_user)
+    except (UserNotFoundError, RoleNotFoundError) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return RoleRead.model_validate(role)
