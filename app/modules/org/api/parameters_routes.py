@@ -4,6 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.modules.auth.api.authorization import PermissionCodesDep, require_permission
+from app.modules.auth.infrastructure.authorization_repository import (
+    AuthorizationRepository,
+)
 from app.modules.org.api.parameters_schemas import (
     ParameterCreate,
     ParameterRead,
@@ -25,16 +28,27 @@ from app.shared.pagination import Page, PageParams
 router = APIRouter(prefix="/parameters", tags=["org · parameters"])
 
 # Callers without auth.roles.create (i.e. not full admins) may only create/update
-# parameters of type "vacancy_name" — every other catalog type is admin-managed.
+# parameters whose type is in their role's writable-type allowlist
+# (auth.role_parameter_type_grants) — every other catalog type is forbidden.
 # See ParameterService.create/update `restrict_to_types` (spec R8).
 _ROLES_CREATE_PERMISSION = "auth.roles.create"
-_RESTRICTED_PARAMETER_TYPES: set[str] = {"vacancy_name"}
 
 
-def _restrict_to_types(caller_codes: set[str]) -> set[str] | None:
+async def _restrict_to_types(
+    caller_codes: set[str], current_user: CurrentUserDep, session: SessionDep
+) -> set[str] | None:
+    """The set of org.parameters TYPE values `current_user` may create/update.
+
+    Returns None when the caller is unrestricted (holds auth.roles.create — full
+    admin). Otherwise returns the caller's role-granted allowlist, which may be
+    an EMPTY set — that is fail-closed (write access to zero catalog types), and
+    is distinct from the None/"unrestricted" case.
+    """
     if _ROLES_CREATE_PERMISSION in caller_codes:
         return None
-    return _RESTRICTED_PARAMETER_TYPES
+    return await AuthorizationRepository(session).list_parameter_types_for_user(
+        current_user.user_id
+    )
 
 
 def get_service(session: SessionDep) -> ParameterService:
@@ -87,10 +101,13 @@ async def create_parameter(
     service: ServiceDep,
     current_user: CurrentUserDep,
     caller_codes: PermissionCodesDep,
+    session: SessionDep,
 ) -> ParameterRead:
     try:
         created = await service.create(
-            data, current_user, restrict_to_types=_restrict_to_types(caller_codes)
+            data,
+            current_user,
+            restrict_to_types=await _restrict_to_types(caller_codes, current_user, session),
         )
     except DuplicateParameterError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
@@ -110,13 +127,14 @@ async def update_parameter(
     service: ServiceDep,
     current_user: CurrentUserDep,
     caller_codes: PermissionCodesDep,
+    session: SessionDep,
 ) -> ParameterRead:
     try:
         updated = await service.update(
             parameter_id,
             data,
             current_user,
-            restrict_to_types=_restrict_to_types(caller_codes),
+            restrict_to_types=await _restrict_to_types(caller_codes, current_user, session),
         )
     except ParameterNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
@@ -130,10 +148,21 @@ async def update_parameter(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("org.parameters.delete"))],
 )
-async def delete_parameter(parameter_id: int, service: ServiceDep) -> None:
+async def delete_parameter(
+    parameter_id: int,
+    service: ServiceDep,
+    current_user: CurrentUserDep,
+    caller_codes: PermissionCodesDep,
+    session: SessionDep,
+) -> None:
     try:
-        await service.delete(parameter_id)
+        await service.delete(
+            parameter_id,
+            restrict_to_types=await _restrict_to_types(caller_codes, current_user, session),
+        )
     except ParameterNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except ParameterTypeForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except ParameterInUseError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

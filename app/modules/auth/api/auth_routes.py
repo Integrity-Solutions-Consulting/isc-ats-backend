@@ -43,6 +43,9 @@ from app.modules.auth.application.auth_service import (
     SamePasswordError,
     TurnstileError,
 )
+from app.modules.auth.infrastructure.authorization_repository import (
+    AuthorizationRepository,
+)
 from app.modules.auth.infrastructure.repository import (
     RefreshTokenRepository,
     UserRepository,
@@ -405,6 +408,29 @@ async def my_permissions(codes: PermissionCodesDep) -> dict[str, list[str]]:
     permission server-side, so an altered response cannot grant real access.
     """
     return {"permissions": sorted(codes)}
+
+
+@router.get("/me/parameter-types")
+async def my_parameter_types(
+    codes: PermissionCodesDep,
+    current_user: CurrentUserDep,
+    session: SessionDep,
+) -> dict[str, bool | list[str]]:
+    """The org.parameters catalog TYPES the authenticated user may create/update.
+
+    `unrestricted=true` (with an empty `types` list) means the caller holds
+    auth.roles.create and may write ANY catalog type — mirrors the same check
+    performed server-side in org.api.parameters_routes._restrict_to_types.
+    Otherwise `types` is the caller's role-granted allowlist (possibly empty,
+    meaning zero writable types). UX defense-in-depth only, same caveat as
+    /me/permissions: every write endpoint still enforces this itself.
+    """
+    if "auth.roles.create" in codes:
+        return {"unrestricted": True, "types": []}
+    types = await AuthorizationRepository(session).list_parameter_types_for_user(
+        current_user.user_id
+    )
+    return {"unrestricted": False, "types": sorted(types)}
 
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)

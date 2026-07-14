@@ -222,9 +222,8 @@ def test_talento_humano_permission_codes_exact_set() -> None:
 
     expected = frozenset(
         {
-            # recruitment — full pipeline management
+            # recruitment — full pipeline management (update/publish, not create)
             "recruitment.vacancies.read",
-            "recruitment.vacancies.create",
             "recruitment.vacancies.update",
             "recruitment.vacancies.delete",
             "recruitment.vacancies.publish",
@@ -245,7 +244,10 @@ def test_talento_humano_permission_codes_exact_set() -> None:
             "recruitment.interviews.create",
             "recruitment.interviews.update",
             "recruitment.interviews.delete",
-            # org — processes, contacts; profile templates read-only; parameters read+create+update
+            # org — processes; parameters read+create+update; read-only on
+            # departments/client_companies/contacts
+            "org.departments.read",
+            "org.client_companies.read",
             "org.processes.read",
             "org.processes.create",
             "org.processes.update",
@@ -255,14 +257,10 @@ def test_talento_humano_permission_codes_exact_set() -> None:
             "org.process_stages.update",
             "org.process_stages.delete",
             "org.contacts.read",
-            "org.contacts.create",
-            "org.contacts.update",
-            "org.contacts.delete",
-            "org.profile_templates.read",
-            "org.profile_template_items.read",
             "org.parameters.read",
             "org.parameters.create",
             "org.parameters.update",
+            "org.parameters.delete",
             # talent
             "talent.talent_pool.read",
             "talent.talent_pool.create",
@@ -277,16 +275,24 @@ def test_talento_humano_permission_codes_exact_set() -> None:
     assert TALENTO_HUMANO_PERMISSION_CODES == expected
 
 
-def test_talento_humano_no_departments_or_client_companies() -> None:
-    """TH must NOT have org.departments.* or org.client_companies.* (outside TH scope)."""
+def test_talento_humano_departments_and_client_companies_read_only() -> None:
+    """TH must have org.departments/org.client_companies READ only — no write access.
+
+    TH needs these to populate the cliente/departamento filters on the vacancies
+    list, but does not manage either catalog (no create/update/delete).
+    """
     from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
         TALENTO_HUMANO_PERMISSION_CODES,
     )
 
-    forbidden = {
-        c for c in TALENTO_HUMANO_PERMISSION_CODES if "departments" in c or "client_companies" in c
+    scoped = {
+        c
+        for c in TALENTO_HUMANO_PERMISSION_CODES
+        if "departments" in c or "client_companies" in c
     }
-    assert not forbidden, f"TH must not hold department/client_companies permissions: {forbidden}"
+    assert scoped == {"org.departments.read", "org.client_companies.read"}, (
+        f"TH must hold exactly departments/client_companies READ, nothing else: {scoped}"
+    )
 
 
 def test_talento_humano_no_ai_permissions() -> None:
@@ -299,8 +305,10 @@ def test_talento_humano_no_ai_permissions() -> None:
     assert not ai_codes, f"TH must not hold ai.* permissions: {ai_codes}"
 
 
-def test_talento_humano_profile_templates_read_only() -> None:
-    """TH must have profile_templates/items READ only — no create/update/delete."""
+def test_talento_humano_no_profile_template_permissions() -> None:
+    """TH must NOT hold any org.profile_templates.* or org.profile_template_items.*
+    permission (not even read) — profile templates are owned exclusively by
+    Comercial/Proyecto per product decision."""
     from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
         TALENTO_HUMANO_PERMISSION_CODES,
     )
@@ -308,9 +316,9 @@ def test_talento_humano_profile_templates_read_only() -> None:
     forbidden = {
         c
         for c in TALENTO_HUMANO_PERMISSION_CODES
-        if ("profile_templates" in c or "profile_template_items" in c) and not c.endswith(".read")
+        if "profile_templates" in c or "profile_template_items" in c
     }
-    assert not forbidden, f"TH must not hold profile_template write permissions: {forbidden}"
+    assert not forbidden, f"TH must not hold any profile_template permissions: {forbidden}"
 
 
 async def test_bootstrap_creates_talento_humano_role_with_correct_grants(

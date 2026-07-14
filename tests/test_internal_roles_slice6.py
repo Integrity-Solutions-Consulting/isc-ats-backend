@@ -169,7 +169,7 @@ async def _staff_user_with_role(session: AsyncSession, role_name: str, *, tag: s
 async def test_copy_route_forbids_caller_without_create_permission(
     session: AsyncSession,
 ) -> None:
-    """Talento Humano (profile_templates.read only) copying a template → 403."""
+    """Talento Humano (no org.profile_templates.* permissions) copying a template → 403."""
     from app.core.database import get_session  # noqa: PLC0415
     from app.core.security import create_access_token  # noqa: PLC0415
     from app.main import app  # noqa: PLC0415

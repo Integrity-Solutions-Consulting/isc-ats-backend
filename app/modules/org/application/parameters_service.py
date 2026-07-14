@@ -103,8 +103,17 @@ class ParameterService:
         changes["ip_updated"] = actor.ip
         return await self.repository.update(parameter, changes)
 
-    async def delete(self, parameter_id: int) -> None:
+    async def delete(
+        self,
+        parameter_id: int,
+        *,
+        restrict_to_types: set[str] | None = None,
+    ) -> None:
         parameter = await self.get(parameter_id)
+        if restrict_to_types is not None and parameter.type not in restrict_to_types:
+            raise ParameterTypeForbiddenError(
+                f"Not allowed to delete parameters of type '{parameter.type}'"
+            )
         if self.in_use_checker is not None and await self.in_use_checker(parameter_id):
             raise ParameterInUseError(
                 "No se puede eliminar el parámetro: está en uso por uno o más "

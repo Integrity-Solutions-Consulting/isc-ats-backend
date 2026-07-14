@@ -13,13 +13,18 @@ Tasks:
        restrict_to_types
   5.7  ParameterService.update is unrestricted when restrict_to_types is None
   5.8  create_parameter route: caller WITHOUT auth.roles.create is restricted to
-       {"vacancy_name"} — 403 for other types, 201 for vacancy_name
+       their role's org.parameters TYPE allowlist (auth.role_parameter_type_grants)
+       — 403 for a type outside it, 201 for one inside it (e.g. "vacancy_name")
   5.9  create_parameter route: caller WITH auth.roles.create is unrestricted
   5.10 update_parameter route: caller WITHOUT auth.roles.create is restricted to
-       {"vacancy_name"} — 403 for other types, 200 for vacancy_name
+       their role's org.parameters TYPE allowlist — 403 for a type outside it,
+       200 for one inside it (e.g. "vacancy_name")
 
 All async tests use a rolled-back session (unit-level) or the full ASGI app
-(route-level, spec R8).
+(route-level, spec R8). See test_parameter_type_grants.py for the per-role
+allowlist model itself (grant_parameter_types_to_role, the GET/PUT
+/auth/roles/{id}/parameter-types endpoints, and TH's extra stage/stage_status
+grants).
 """
 
 from __future__ import annotations
@@ -206,7 +211,8 @@ async def _staff_user_with_role(
 async def test_create_parameter_route_forbids_restricted_caller_off_allowlist(
     session: AsyncSession,
 ) -> None:
-    """Talento Humano (no auth.roles.create) creating type='career' → 403."""
+    """Talento Humano (allowlist: stage, stage_status) creating
+    type='career' → 403 (career is outside TH's allowlist)."""
     from app.core.database import get_session  # noqa: PLC0415
     from app.core.security import create_access_token  # noqa: PLC0415
     from app.main import app  # noqa: PLC0415
@@ -235,7 +241,7 @@ async def test_create_parameter_route_forbids_restricted_caller_off_allowlist(
 async def test_create_parameter_route_allows_restricted_caller_vacancy_name(
     session: AsyncSession,
 ) -> None:
-    """Talento Humano (no auth.roles.create) creating type='vacancy_name' → 201."""
+    """Comercial (allowlist: vacancy_name) creating type='vacancy_name' → 201."""
     from app.core.database import get_session  # noqa: PLC0415
     from app.core.security import create_access_token  # noqa: PLC0415
     from app.main import app  # noqa: PLC0415
@@ -299,7 +305,8 @@ async def test_create_parameter_route_unrestricted_for_caller_with_roles_create(
 async def test_update_parameter_route_forbids_restricted_caller_off_allowlist(
     session: AsyncSession,
 ) -> None:
-    """Proyecto (no auth.roles.create) updating a 'career' parameter → 403."""
+    """Proyecto (allowlist: vacancy_name) updating a 'career' parameter → 403
+    (career is outside Proyecto's allowlist)."""
     from app.core.database import get_session  # noqa: PLC0415
     from app.core.security import create_access_token  # noqa: PLC0415
     from app.main import app  # noqa: PLC0415
@@ -331,13 +338,14 @@ async def test_update_parameter_route_forbids_restricted_caller_off_allowlist(
 async def test_update_parameter_route_allows_restricted_caller_vacancy_name(
     session: AsyncSession,
 ) -> None:
-    """Talento Humano (no auth.roles.create) updating a 'vacancy_name' parameter → 200."""
+    """Comercial (allowlist: vacancy_name) updating a 'vacancy_name'
+    parameter → 200."""
     from app.core.database import get_session  # noqa: PLC0415
     from app.core.security import create_access_token  # noqa: PLC0415
     from app.main import app  # noqa: PLC0415
 
     tag = uuid.uuid4().hex[:8]
-    user, _admin = await _staff_user_with_role(session, "Talento Humano", tag=tag)
+    user, _admin = await _staff_user_with_role(session, "Comercial", tag=tag)
     param = await BaseRepository(session, Parameter).add(
         Parameter(type="vacancy_name", code=f"vn-{tag}", name="Dev")
     )
