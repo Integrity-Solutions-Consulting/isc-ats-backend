@@ -27,7 +27,7 @@ class VacancyExpanded:
     contact_id: int
     contact: str
     department: str
-    process: str
+    process: str | None
     career: str
     city: str
     work_mode: str
@@ -43,6 +43,7 @@ class VacancyExpanded:
     profile_template_id: int | None
     is_active: bool
     created_at: datetime
+    updated_at: datetime | None
 
 
 class VacanciesExpandedRepository:
@@ -96,12 +97,16 @@ class VacanciesExpandedRepository:
                 Vacancy.profile_template_id,
                 Vacancy.is_active,
                 Vacancy.created_at,
+                Vacancy.updated_at,
             )
             .join(VacancyName, Vacancy.vacancy_name_id == VacancyName.id)
             .join(ClientCompany, Vacancy.client_company_id == ClientCompany.id)
             .join(Contact, Vacancy.contact_id == Contact.id)
             .join(Department, Vacancy.department_id == Department.id)
-            .join(Process, Vacancy.process_id == Process.id)
+            # LEFT OUTER: a solicitud (no publish yet) legitimately has no
+            # process assigned — an inner join would silently drop the row
+            # from the list/detail response.
+            .join(Process, Vacancy.process_id == Process.id, isouter=True)
             .join(CareerParam, Vacancy.career_id == CareerParam.id)
             .join(CityParam, Vacancy.city_id == CityParam.id)
             .join(WorkModeParam, Vacancy.work_mode_id == WorkModeParam.id)
@@ -164,12 +169,16 @@ class VacanciesExpandedRepository:
                 Vacancy.profile_template_id,
                 Vacancy.is_active,
                 Vacancy.created_at,
+                Vacancy.updated_at,
             )
             .join(VacancyName, Vacancy.vacancy_name_id == VacancyName.id)
             .join(ClientCompany, Vacancy.client_company_id == ClientCompany.id)
             .join(Contact, Vacancy.contact_id == Contact.id)
             .join(Department, Vacancy.department_id == Department.id)
-            .join(Process, Vacancy.process_id == Process.id)
+            # LEFT OUTER: a solicitud (no publish yet) legitimately has no
+            # process assigned — an inner join would silently drop the row
+            # from the list/detail response.
+            .join(Process, Vacancy.process_id == Process.id, isouter=True)
             .join(CareerParam, Vacancy.career_id == CareerParam.id)
             .join(CityParam, Vacancy.city_id == CityParam.id)
             .join(WorkModeParam, Vacancy.work_mode_id == WorkModeParam.id)

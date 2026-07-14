@@ -146,6 +146,7 @@ async def list_vacancies_public(
             description=v.description,
             profile_requirements=v.profile_requirements,
             created_at=v.created_at,
+            updated_at=v.updated_at,
         )
         for v in items
     ]
@@ -178,6 +179,7 @@ async def get_vacancy_public(vacancy_id: int, session: SessionDep) -> PublicVaca
         description=item.description,
         profile_requirements=item.profile_requirements,
         created_at=item.created_at,
+        updated_at=item.updated_at,
     )
 
 
