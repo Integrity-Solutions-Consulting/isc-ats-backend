@@ -2,10 +2,20 @@
 
 Converts interviewer availability windows into concrete UTC datetime slots
 for a given target date, filtering out already-booked intervals.
+
+R1 (timezone): availability windows (`start_time`/`end_time`) and `target_date`
+are always expressed in Ecuador local time (UTC-5, no DST). Every instant is
+converted local -> UTC exactly once, at the point a concrete slot datetime is
+emitted. Booked intervals arrive as real UTC instants (as stored in the DB)
+and are normalized back to Ecuador local time before being compared against
+the local availability window.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta, timezone
+
+# Ecuador does not observe DST — a fixed UTC-5 offset is correct year-round.
+EC_TZ = timezone(timedelta(hours=-5))
 
 
 @dataclass(frozen=True)
@@ -107,17 +117,19 @@ class SlotGenerationService:
         """
         target_weekday = target_date.weekday()  # 0=Monday..6=Sunday
 
-        # Convert booked intervals to time tuples on target_date (UTC)
+        # Convert booked intervals to time tuples on target_date, in Ecuador
+        # LOCAL time — the availability window itself (start_time/end_time) is
+        # local, so overlap comparisons must happen in the same space (D1a).
         booked_times: list[tuple[time, time]] = []
         for booked_start, booked_end in booked_interviews:
-            # Normalize to UTC
+            # Normalize to Ecuador local time
             if booked_start.tzinfo is not None:
-                bs = booked_start.astimezone(UTC)
-                be = booked_end.astimezone(UTC)
+                bs = booked_start.astimezone(EC_TZ)
+                be = booked_end.astimezone(EC_TZ)
             else:
-                bs = booked_start.replace(tzinfo=UTC)
-                be = booked_end.replace(tzinfo=UTC)
-            
+                bs = booked_start.replace(tzinfo=EC_TZ)
+                be = booked_end.replace(tzinfo=EC_TZ)
+
             bs_date = bs.date()
             be_date = be.date()
             if bs_date <= target_date <= be_date:
@@ -141,14 +153,19 @@ class SlotGenerationService:
                 booked_intervals=booked_times,
             )
             for t in free_times:
-                slot_dt = datetime(
+                # The slot start is a wall-clock time on target_date, in Ecuador
+                # local time. Convert to UTC exactly once, here — this also
+                # correctly rolls the date over when a late local slot crosses
+                # midnight UTC (e.g. 21:00 local -> 02:00 UTC next day).
+                slot_local = datetime(
                     target_date.year,
                     target_date.month,
                     target_date.day,
                     t.hour,
                     t.minute,
-                    tzinfo=UTC,
+                    tzinfo=EC_TZ,
                 )
+                slot_dt = slot_local.astimezone(UTC)
                 result.append(slot_dt)
 
         result.sort()

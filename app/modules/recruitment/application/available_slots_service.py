@@ -4,7 +4,7 @@ Separates slot-computation from DB access: reads availability windows and
 existing booked interviews, delegates computation to SlotGenerationService.
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.auth.infrastructure.models import User
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.application.slot_generation_service import (
+    EC_TZ,
     AvailabilityWindow,
     SlotGenerationService,
 )
@@ -75,8 +76,16 @@ class AvailableSlotsService:
         cancelled_param = await param_repo.get_by_type_and_code("interview_status", "cancelled")
         cancelled_id: int | None = cancelled_param.id if cancelled_param is not None else None
 
-        day_start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=UTC)
-        day_end = day_start.replace(hour=23, minute=59, second=59)
+        # R1/D1: availability windows are Ecuador LOCAL time, so a late local
+        # slot (e.g. 22:00) can land on the NEXT UTC calendar day. Widen the
+        # booked-interview query from a UTC calendar day to the Ecuador LOCAL
+        # calendar day expressed in UTC — otherwise near-midnight-local bookings
+        # are silently missed and a double-booked slot leaks through.
+        local_day_start = datetime(
+            target_date.year, target_date.month, target_date.day, tzinfo=EC_TZ
+        )
+        day_start = local_day_start.astimezone(UTC)
+        day_end = (local_day_start + timedelta(days=1)).astimezone(UTC)
 
         booked_stmt = (
             select(Interview)

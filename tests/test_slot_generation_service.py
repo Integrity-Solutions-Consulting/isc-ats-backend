@@ -6,13 +6,15 @@ Covers:
 - Slot excluded when start + slot_duration_min > window.end_time
 - Cancelled interviews do NOT block slots
 - Inactive availability rows are excluded
-- UTC conversion: target_date with UTC-5 availability computes correctly
+- Ecuador (UTC-5) local->UTC conversion: availability windows are configured in
+  Ecuador local time and must be converted to UTC exactly once (R1)
 - Already-booked (active, non-cancelled) interviews block overlapping slots
 """
 
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta, timezone
 
 from app.modules.recruitment.application.slot_generation_service import (
+    EC_TZ,
     AvailabilityWindow,
     SlotGenerationService,
     generate_slots_for_window,
@@ -140,7 +142,8 @@ def _make_window(
 
 
 def test_service_basic_slots() -> None:
-    """Basic service integration: returns UTC datetimes for the correct date."""
+    """Basic service integration: availability windows are Ecuador (UTC-5) local
+    time and must be converted to UTC exactly once (R1)."""
     svc = SlotGenerationService()
     windows = [_make_window()]
     slots = svc.get_available_slots(
@@ -148,10 +151,40 @@ def test_service_basic_slots() -> None:
         windows=windows,
         booked_interviews=[],
     )
-    # 09:00 and 10:00 on 2026-06-15 in UTC (windows treated as UTC here since no TZ info)
+    # 09:00 and 10:00 Ecuador local -> 14:00 and 15:00 UTC (local + 5h)
     assert len(slots) == 2
-    assert slots[0].hour == 9 and slots[0].minute == 0
-    assert slots[1].hour == 10 and slots[1].minute == 0
+    assert slots[0].hour == 14 and slots[0].minute == 0
+    assert slots[1].hour == 15 and slots[1].minute == 0
+    assert slots[0].tzinfo == UTC
+
+
+def test_service_ec_offset_applied_exactly_once() -> None:
+    """R1: 08:00 configured local MUST become 13:00Z, never double-shifted (03:00 or 18:00)."""
+    svc = SlotGenerationService()
+    windows = [_make_window(start=time(8, 0), end=time(9, 0), slot_duration_min=60)]
+    slots = svc.get_available_slots(
+        target_date=_TARGET_DATE,
+        windows=windows,
+        booked_interviews=[],
+    )
+    assert len(slots) == 1
+    assert slots[0] == datetime(2026, 6, 15, 13, 0, tzinfo=UTC)
+
+
+def test_service_late_window_rolls_over_to_next_utc_day() -> None:
+    """A late local window (21:00) crosses midnight in UTC without error.
+
+    21:00 Ecuador local on 2026-06-15 (Monday) -> 02:00 UTC on 2026-06-16.
+    """
+    svc = SlotGenerationService()
+    windows = [_make_window(start=time(21, 0), end=time(22, 0), slot_duration_min=60)]
+    slots = svc.get_available_slots(
+        target_date=_TARGET_DATE,
+        windows=windows,
+        booked_interviews=[],
+    )
+    assert len(slots) == 1
+    assert slots[0] == datetime(2026, 6, 16, 2, 0, tzinfo=UTC)
 
 
 def test_service_inactive_availability_excluded() -> None:
@@ -180,23 +213,27 @@ def test_service_wrong_day_of_week_excluded() -> None:
 
 
 def test_service_booked_interview_blocks_slot() -> None:
-    """Active interview in the window blocks its overlapping slot."""
+    """Active interview in the window blocks its overlapping slot.
+
+    booked_interviews carry real UTC instants (as stored in the DB); the service
+    must normalize them to Ecuador LOCAL before comparing against the (local)
+    availability window (D1a). 09:30-10:30 Ecuador local == 14:30-15:30 UTC.
+    """
     svc = SlotGenerationService()
     windows = [_make_window()]
-    # Book 09:30 - 10:30 on target date (UTC)
-    booked_start = datetime(2026, 6, 15, 9, 30, tzinfo=UTC)
-    booked_end = datetime(2026, 6, 15, 10, 30, tzinfo=UTC)
+    booked_start = datetime(2026, 6, 15, 14, 30, tzinfo=UTC)
+    booked_end = datetime(2026, 6, 15, 15, 30, tzinfo=UTC)
     slots = svc.get_available_slots(
         target_date=_TARGET_DATE,
         windows=windows,
         booked_interviews=[(booked_start, booked_end)],
     )
-    # 09:00 slot (09:00-10:00) overlaps [09:30-10:30]; 10:00 (10:00-11:00) overlaps too
+    # 09:00 slot (09:00-10:00 local) overlaps [09:30-10:30 local]; 10:00 (10:00-11:00) overlaps too
     assert slots == []
 
 
 def test_service_buffer_30_10() -> None:
-    """Design-specified example: 30-min slot, 10-min buffer, 10:00-12:00 -> 10:00, 10:40, 11:20."""
+    """Design-specified example: 30-min slot, 10-min buffer, 10:00-12:00 local -> UTC 15:00, 15:40, 16:20."""
     svc = SlotGenerationService()
     windows = [
         _make_window(
@@ -213,4 +250,9 @@ def test_service_buffer_30_10() -> None:
         booked_interviews=[],
     )
     times = [(s.hour, s.minute) for s in slots]
-    assert times == [(10, 0), (10, 40), (11, 20)]
+    assert times == [(15, 0), (15, 40), (16, 20)]
+
+
+def test_service_ec_tz_is_fixed_utc_minus_5() -> None:
+    """EC_TZ must be a fixed UTC-5 offset (Ecuador does not observe DST)."""
+    assert EC_TZ == timezone(timedelta(hours=-5))

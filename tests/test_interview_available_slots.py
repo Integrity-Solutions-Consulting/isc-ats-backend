@@ -77,7 +77,11 @@ _MONDAY = date(2026, 6, 15)
 
 
 async def test_available_slots_basic(session: AsyncSession) -> None:
-    """Returns slots from active availability for the correct weekday."""
+    """Returns slots from active availability for the correct weekday.
+
+    Availability is configured in Ecuador local time (R1); 09:00/10:00 local
+    must come back as 14:00/15:00 UTC (local + 5h), never the raw local hour.
+    """
     user = await _make_user(session)
     await _make_availability(session, user.id, day_of_week=0, start=time(9, 0), end=time(11, 0))
 
@@ -87,7 +91,7 @@ async def test_available_slots_basic(session: AsyncSession) -> None:
         target_date=_MONDAY,
     )
     times = [(s.hour, s.minute) for s in slots]
-    assert times == [(9, 0), (10, 0)]
+    assert times == [(14, 0), (15, 0)]
 
 
 async def test_available_slots_inactive_excluded(session: AsyncSession) -> None:
@@ -117,7 +121,10 @@ async def test_available_slots_wrong_day_excluded(session: AsyncSession) -> None
 
 
 async def test_available_slots_with_buffer(session: AsyncSession) -> None:
-    """Buffer reduces the number of slots (30-min slot + 10-min buffer)."""
+    """Buffer reduces the number of slots (30-min slot + 10-min buffer).
+
+    10:00/10:40/11:20 local -> 15:00/15:40/16:20 UTC.
+    """
     user = await _make_user(session)
     await _make_availability(
         session,
@@ -131,7 +138,144 @@ async def test_available_slots_with_buffer(session: AsyncSession) -> None:
     svc = _make_svc(session)
     slots = await svc.get_slots(interviewer_id=user.id, target_date=_MONDAY)
     times = [(s.hour, s.minute) for s in slots]
-    assert times == [(10, 0), (10, 40), (11, 20)]
+    assert times == [(15, 0), (15, 40), (16, 20)]
+
+
+# ── R1: day-boundary widening (local day may span two UTC calendar days) ──────
+
+
+async def test_available_slots_late_window_booking_near_local_midnight_blocks_slot(
+    session: AsyncSession,
+) -> None:
+    """A late local window's booked interval can fall on the NEXT UTC calendar day.
+
+    Availability 21:00-23:00 Ecuador local (30-min slots, no buffer) ->
+    slots at 21:00, 21:30, 22:00, 22:30 local == 02:00, 02:30, 03:00, 03:30 UTC
+    on the NEXT day (2026-06-16).
+
+    A booked interview at 22:15-22:45 local (== 2026-06-16 03:15-03:45 UTC —
+    a UTC calendar day AFTER target_date) must still be fetched and block the
+    overlapping 22:00 and 22:30 local slots. Before the fix, the DB query
+    bounded booked intervals to the UTC calendar day of target_date and would
+    have missed this interview entirely, leaking a double-booked slot.
+    """
+    user = await _make_user(session)
+    await _make_availability(
+        session,
+        user.id,
+        day_of_week=0,
+        start=time(21, 0),
+        end=time(23, 0),
+        slot_duration_min=30,
+        buffer_min=0,
+    )
+
+    from app.modules.org.infrastructure.models import (
+        ClientCompany,
+        Contact,
+        Department,
+        Parameter,
+        Process,
+        ProcessStage,
+    )
+    from app.modules.recruitment.infrastructure.application_models import Application
+    from app.modules.recruitment.infrastructure.candidate_models import Candidate
+    from app.modules.recruitment.infrastructure.models import Vacancy
+
+    param_repo = ParameterRepository(session)
+    dummy_param = await BaseRepository(session, Parameter).add(
+        Parameter(type="x_slots_boundary_test", code=uuid.uuid4().hex[:8], name="P", created_by=1)
+    )
+    company = await BaseRepository(session, ClientCompany).add(
+        ClientCompany(name=f"Co{uuid.uuid4().hex[:4]}", created_by=1)
+    )
+    contact = await BaseRepository(session, Contact).add(
+        Contact(
+            client_company_id=company.id,
+            first_name="A",
+            last_name="B",
+            email=f"{uuid.uuid4().hex[:8]}@boundary.test",
+            created_by=1,
+        )
+    )
+    dept = await BaseRepository(session, Department).add(
+        Department(name=f"D{uuid.uuid4().hex[:4]}", created_by=1)
+    )
+    process = await BaseRepository(session, Process).add(
+        Process(
+            client_company_id=company.id,
+            department_id=dept.id,
+            name=f"Proc{uuid.uuid4().hex[:4]}",
+            created_by=1,
+        )
+    )
+    stage = await BaseRepository(session, ProcessStage).add(
+        ProcessStage(process_id=process.id, stage_id=dummy_param.id, order=1, created_by=1)
+    )
+    vacancy = await BaseRepository(session, Vacancy).add(
+        Vacancy(
+            vacancy_name_id=dummy_param.id,
+            client_company_id=company.id,
+            contact_id=contact.id,
+            department_id=dept.id,
+            process_id=process.id,
+            career_id=dummy_param.id,
+            city_id=dummy_param.id,
+            work_mode_id=dummy_param.id,
+            resource_level_id=dummy_param.id,
+            status_id=dummy_param.id,
+            created_by=1,
+        )
+    )
+    portal = await param_repo.get_by_type_and_code("user_portal", "staff")
+    candidate_user = await BaseRepository(session, User).add(
+        User(
+            email=f"{uuid.uuid4().hex[:12]}@boundary-candidate.local",
+            portal_id=portal.id,
+            created_by=1,
+            ip_created="127.0.0.1",
+        )
+    )
+    candidate = await BaseRepository(session, Candidate).add(
+        Candidate(user_id=candidate_user.id, first_name="X", last_name="Y", created_by=1)
+    )
+    application = await BaseRepository(session, Application).add(
+        Application(
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=dummy_param.id,
+            created_by=1,
+        )
+    )
+    scheduled_param = await param_repo.get_by_type_and_code("interview_status", "scheduled")
+    assert scheduled_param is not None
+
+    booked_start = datetime(2026, 6, 16, 3, 15, tzinfo=UTC)
+    booked_end = datetime(2026, 6, 16, 3, 45, tzinfo=UTC)
+    await BaseRepository(session, Interview).add(
+        Interview(
+            application_id=application.id,
+            process_stage_id=stage.id,
+            interviewer_id=user.id,
+            scheduled_at=booked_start,
+            ends_at=booked_end,
+            status_id=scheduled_param.id,
+            scheduled_by_id=dummy_param.id,
+            created_by=1,
+            ip_created="127.0.0.1",
+        )
+    )
+
+    svc = _make_svc(session)
+    slots = await svc.get_slots(interviewer_id=user.id, target_date=_MONDAY)
+    times = [(s.hour, s.minute) for s in slots]
+    # 22:00 (02:00-03:00 -> ends_at 03:00Z... wait compare in UTC) and 22:30 local
+    # (03:00Z, 03:30Z) overlap the booked 03:15-03:45Z interval and must be excluded.
+    assert (3, 0) not in times, "22:00 local slot must be blocked by the near-midnight booking"
+    assert (3, 30) not in times, "22:30 local slot must be blocked by the near-midnight booking"
+    # 21:00 and 21:30 local (02:00Z, 02:30Z) do not overlap and must remain free.
+    assert (2, 0) in times
+    assert (2, 30) in times
 
 
 # ── interviewers tests ────────────────────────────────────────────────────────
@@ -309,6 +453,7 @@ async def test_cancelled_interview_does_not_block_slot(session: AsyncSession) ->
     svc = _make_svc(session)
     slots = await svc.get_slots(interviewer_id=interviewer.id, target_date=_MONDAY)
     times = [(s.hour, s.minute) for s in slots]
-    # Both slots must be available; cancelled interview must NOT block 09:00
-    assert (9, 0) in times, "09:00 slot must be available despite cancelled interview"
-    assert (10, 0) in times
+    # Both slots must be available; cancelled interview must NOT block 09:00 local
+    # (== 14:00 UTC) / 10:00 local (== 15:00 UTC).
+    assert (14, 0) in times, "09:00 local slot must be available despite cancelled interview"
+    assert (15, 0) in times
