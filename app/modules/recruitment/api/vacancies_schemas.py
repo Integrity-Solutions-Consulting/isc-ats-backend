@@ -9,7 +9,7 @@ class VacancyBase(BaseModel):
     client_company_id: int
     contact_id: int
     department_id: int
-    process_id: int
+    process_id: int | None = None
     career_id: int = Field(description="org.parameters (type=career)")
     city_id: int = Field(description="org.parameters (type=city)")
     work_mode_id: int = Field(description="org.parameters (type=work_mode)")
@@ -72,7 +72,7 @@ class VacancyListItem(BaseModel):
     contact_id: int
     contact: str
     department: str
-    process: str
+    process: str | None
     career: str
     city: str
     work_mode: str
@@ -108,6 +108,10 @@ class PublicVacancyItem(BaseModel):
     description: str | None
     profile_requirements: dict[str, Any] | None
     created_at: datetime
+    # The moment this row was last written — used as "published at" by the
+    # frontend since `active` status is reached via an update, not the
+    # original creation (a solicitud is created first, published later).
+    updated_at: datetime | None
 
 
 # ── Pipeline schemas ──────────────────────────────────────────────────────────
@@ -161,7 +165,7 @@ class PipelineSchema(BaseModel):
 class VacancyDocumentItem(BaseModel):
     """One generated Word profile document associated with a vacancy's candidate."""
 
-    id: int                     # application_documents.id
+    id: int  # application_documents.id
     application_id: int
     candidate_id: int
     candidate_name: str
@@ -172,5 +176,5 @@ class VacancyDocumentItem(BaseModel):
     file_id: int | None
     stored_key: str | None
     version: int
-    generated_by: str           # author display name (email → "Nombre Apellido")
+    generated_by: str  # author display name (email → "Nombre Apellido")
     generated_at: datetime

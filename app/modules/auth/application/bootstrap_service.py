@@ -15,6 +15,7 @@ from app.core.security import hash_password
 from app.modules.auth.infrastructure.models import (
     Permission,
     Role,
+    RoleParameterTypeGrant,
     RolePermission,
     User,
     UserRole,
@@ -26,6 +27,12 @@ ADMIN_ROLE_NAME = "Administrador"
 ADMIN_PORTAL_CODE = "staff"
 
 CANDIDATE_ROLE_NAME = "candidate"
+
+# Internal staff role name constants — single source of truth; imported by
+# notification fan-out and any other code that resolves roles by name.
+TALENTO_HUMANO_ROLE_NAME = "Talento Humano"
+COMERCIAL_ROLE_NAME = "Comercial"
+PROYECTO_ROLE_NAME = "Proyecto"
 
 # Exact permission codes the candidate-portal BFF is allowed to call.
 # Verified against the frontend API calls — do not expand without a front-end audit.
@@ -44,6 +51,126 @@ CANDIDATE_PERMISSION_CODES: frozenset[str] = frozenset(
         "org.parameters.read",
     }
 )
+
+# Internal staff role — Talento Humano.
+# Full recruitment pipeline management (vacancies update + publish, full candidate/application
+# pipeline, interviews). Owns process/stage configuration. Talent pool
+# read+create+delete. Parameters read+create+update (a per-role type allowlist narrows
+# create/update/delete to stage/stage_status — see auth.role_parameter_type_grants).
+# Read-only on org.departments, org.client_companies and org.contacts — needed to
+# populate filters and to see who to coordinate with, but TH does not manage those
+# catalogs (no create/update/delete). No ai.* — outside TH's operational scope per
+# design #388.
+# recruitment.vacancies.create is intentionally NOT granted — TH never creates a new
+# vacancy from scratch, it only updates/publishes an existing "solicitud"-status vacancy
+# created by Comercial/Proyecto. Profile templates (org.profile_templates.*,
+# org.profile_template_items.*) are owned exclusively by Comercial/Proyecto and are
+# intentionally NOT granted to TH either.
+TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
+    {
+        # recruitment — full pipeline management (update/publish, not create)
+        "recruitment.vacancies.read",
+        "recruitment.vacancies.update",
+        "recruitment.vacancies.delete",
+        "recruitment.vacancies.publish",
+        "recruitment.candidates.read",
+        "recruitment.candidates.create",
+        "recruitment.candidates.update",
+        "recruitment.candidates.delete",
+        "recruitment.applications.read",
+        "recruitment.applications.create",
+        "recruitment.applications.update",
+        "recruitment.applications.delete",
+        "recruitment.application_notes.read",
+        "recruitment.application_notes.create",
+        "recruitment.application_notes.update",
+        "recruitment.application_notes.delete",
+        "recruitment.application_documents.read",
+        "recruitment.interviews.read",
+        "recruitment.interviews.create",
+        "recruitment.interviews.update",
+        "recruitment.interviews.delete",
+        # org — process/stage configuration; read-only on departments/clients/contacts
+        "org.departments.read",
+        "org.client_companies.read",
+        "org.processes.read",
+        "org.processes.create",
+        "org.processes.update",
+        "org.processes.delete",
+        "org.process_stages.read",
+        "org.process_stages.create",
+        "org.process_stages.update",
+        "org.process_stages.delete",
+        "org.contacts.read",
+        "org.parameters.read",
+        "org.parameters.create",
+        "org.parameters.update",
+        "org.parameters.delete",
+        # talent
+        "talent.talent_pool.read",
+        "talent.talent_pool.create",
+        "talent.talent_pool.delete",
+        # storage
+        "storage.files.read",
+        "storage.files.create",
+        # comms
+        "comms.notifications.read",
+    }
+)
+
+# Internal staff roles — Comercial and Proyecto share an identical allowlist.
+# Comercial manages client-side vacancy sourcing; Proyecto manages delivery execution.
+# Both roles: create vacancies (but cannot update/delete/publish — TH owns lifecycle),
+# read-only pipeline access (applications/notes/interviews/documents), read-only talent pool,
+# and full CRUD on profile templates and items (they own candidate profile authoring).
+# No org.processes/process_stages (TH owns those). No ai.* permissions.
+COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
+    {
+        # recruitment — vacancy read+create only; full pipeline read; no write on pipeline
+        "recruitment.vacancies.read",
+        "recruitment.vacancies.create",
+        "recruitment.candidates.read",
+        "recruitment.applications.read",
+        "recruitment.application_notes.read",
+        "recruitment.application_documents.read",
+        "recruitment.interviews.read",
+        # org — contacts read; full CRUD on profile templates/items; parameters read+create+update
+        "org.contacts.read",
+        "org.profile_templates.read",
+        "org.profile_templates.create",
+        "org.profile_templates.update",
+        "org.profile_templates.delete",
+        "org.profile_template_items.read",
+        "org.profile_template_items.create",
+        "org.profile_template_items.update",
+        "org.profile_template_items.delete",
+        "org.parameters.read",
+        "org.parameters.create",
+        "org.parameters.update",
+        # talent — read only
+        "talent.talent_pool.read",
+        # storage
+        "storage.files.read",
+        "storage.files.create",
+        # comms
+        "comms.notifications.read",
+    }
+)
+
+# Proyecto mirrors Comercial exactly — both roles have identical allowlists per design #388.
+PROYECTO_PERMISSION_CODES: frozenset[str] = COMERCIAL_PERMISSION_CODES
+
+# Per-role allowlist of org.parameters catalog TYPES (org.parameters.type values)
+# each internal role may create/update/delete via POST/PATCH/DELETE /org/parameters.
+# Replaces the previous hardcoded, global "non-admins may only write vacancy_name"
+# rule — see auth.role_parameter_type_grants and ParameterTypeForbiddenError.
+# Talento Humano owns EXACTLY stage/stage_status (the 2 catalogs it operates day to
+# day) — vacancy_name ("Plantillas de nombre") is owned by Comercial/Proyecto, not TH.
+TALENTO_HUMANO_PARAMETER_TYPES: frozenset[str] = frozenset({"stage", "stage_status"})
+COMERCIAL_PARAMETER_TYPES: frozenset[str] = frozenset({"vacancy_name"})
+
+# Proyecto mirrors Comercial exactly, same rationale as PROYECTO_PERMISSION_CODES.
+PROYECTO_PARAMETER_TYPES: frozenset[str] = COMERCIAL_PARAMETER_TYPES
 
 
 class BootstrapError(Exception):
@@ -79,11 +206,7 @@ async def sync_permissions(session: AsyncSession) -> int:
 
 
 async def ensure_admin_role(session: AsyncSession) -> Role:
-    stmt = (
-        select(Role)
-        .where(Role.name == ADMIN_ROLE_NAME)
-        .where(Role.is_active.is_(True))
-    )
+    stmt = select(Role).where(Role.name == ADMIN_ROLE_NAME).where(Role.is_active.is_(True))
     role = (await session.execute(stmt)).scalar_one_or_none()
     if role is None:
         role = Role(name=ADMIN_ROLE_NAME, description="Full access — all permissions")
@@ -94,14 +217,11 @@ async def ensure_admin_role(session: AsyncSession) -> Role:
 
 async def grant_all_permissions_to_role(session: AsyncSession, role_id: int) -> int:
     permission_ids = (
-        await session.execute(
-            select(Permission.id).where(Permission.is_active.is_(True))
-        )
-    ).scalars().all()
-    rows = [
-        {"role_id": role_id, "permission_id": pid, "is_active": True}
-        for pid in permission_ids
-    ]
+        (await session.execute(select(Permission.id).where(Permission.is_active.is_(True))))
+        .scalars()
+        .all()
+    )
+    rows = [{"role_id": role_id, "permission_id": pid, "is_active": True} for pid in permission_ids]
     stmt = pg_insert(RolePermission).values(rows)
     stmt = stmt.on_conflict_do_update(
         index_elements=[RolePermission.role_id, RolePermission.permission_id],
@@ -112,11 +232,7 @@ async def grant_all_permissions_to_role(session: AsyncSession, role_id: int) -> 
 
 
 async def ensure_candidate_role(session: AsyncSession) -> Role:
-    stmt = (
-        select(Role)
-        .where(Role.name == CANDIDATE_ROLE_NAME)
-        .where(Role.is_active.is_(True))
-    )
+    stmt = select(Role).where(Role.name == CANDIDATE_ROLE_NAME).where(Role.is_active.is_(True))
     role = (await session.execute(stmt)).scalar_one_or_none()
     if role is None:
         role = Role(
@@ -128,25 +244,26 @@ async def ensure_candidate_role(session: AsyncSession) -> Role:
     return role
 
 
-async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: int) -> int:
-    """Make the candidate role hold EXACTLY CANDIDATE_PERMISSION_CODES.
+async def grant_permissions_to_role(
+    session: AsyncSession, role_id: int, allowlist: frozenset[str]
+) -> int:
+    """Make a role hold EXACTLY the permissions named in *allowlist*.
 
-    Grants (upsert active) every allowlisted code and revokes (is_active=False) any
-    other grant on this role. Without the revoke, tightening the allowlist would only
-    stop *adding* a permission — an already-granted coarse code (e.g. the old
-    recruitment.vacancies.read) would linger and keep the leak open.
+    Upserts active grants for every code in *allowlist* and revokes (is_active=False)
+    any existing active grant on this role whose permission code is NOT in the list.
+    Safe to call multiple times — the result is always the same stable state.
+
+    Returns the number of grants in the allowlist (may differ from the number of
+    rows actually changed).
     """
     permission_ids = (
-        await session.execute(
-            select(Permission.id).where(Permission.code.in_(CANDIDATE_PERMISSION_CODES))
-        )
-    ).scalars().all()
+        (await session.execute(select(Permission.id).where(Permission.code.in_(allowlist))))
+        .scalars()
+        .all()
+    )
     if not permission_ids:
         return 0
-    rows = [
-        {"role_id": role_id, "permission_id": pid, "is_active": True}
-        for pid in permission_ids
-    ]
+    rows = [{"role_id": role_id, "permission_id": pid, "is_active": True} for pid in permission_ids]
     stmt = pg_insert(RolePermission).values(rows)
     stmt = stmt.on_conflict_do_update(
         index_elements=[RolePermission.role_id, RolePermission.permission_id],
@@ -155,7 +272,7 @@ async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: in
     await session.execute(stmt)
 
     # Authoritative: revoke any grant on this role outside the allowlist so a
-    # previously-granted coarse permission is actually removed, not just left behind.
+    # previously-granted permission is actually removed, not just left behind.
     await session.execute(
         update(RolePermission)
         .where(RolePermission.role_id == role_id)
@@ -166,12 +283,66 @@ async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: in
     return len(rows)
 
 
+async def grant_parameter_types_to_role(
+    session: AsyncSession, role_id: int, allowlist: set[str]
+) -> int:
+    """Make a role's writable org.parameters TYPE allowlist match *allowlist* exactly.
+
+    Upserts active grants for every type in *allowlist* and revokes (is_active=False)
+    any existing active grant on this role whose parameter_type is NOT in the list.
+    Mirrors grant_permissions_to_role's upsert-then-revoke shape; unlike permissions,
+    parameter_type is a plain string (org.parameters.type is not a modeled entity),
+    so there is no id lookup step — the allowlist strings ARE the rows.
+
+    Safe to call multiple times — the result is always the same stable state. An
+    empty allowlist revokes every active grant on the role (fail-closed).
+
+    Returns the number of grants in the allowlist.
+    """
+    if allowlist:
+        rows = [
+            {"role_id": role_id, "parameter_type": ptype, "is_active": True}
+            for ptype in allowlist
+        ]
+        stmt = pg_insert(RoleParameterTypeGrant).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[
+                RoleParameterTypeGrant.role_id,
+                RoleParameterTypeGrant.parameter_type,
+            ],
+            set_={"is_active": True},
+        )
+        await session.execute(stmt)
+
+    # Authoritative: revoke any grant on this role outside the allowlist so a
+    # previously-granted type is actually removed, not just left behind.
+    revoke_stmt = (
+        update(RoleParameterTypeGrant)
+        .where(RoleParameterTypeGrant.role_id == role_id)
+        .where(RoleParameterTypeGrant.is_active.is_(True))
+        .values(is_active=False)
+    )
+    if allowlist:
+        revoke_stmt = revoke_stmt.where(
+            RoleParameterTypeGrant.parameter_type.not_in(allowlist)
+        )
+    await session.execute(revoke_stmt)
+    return len(allowlist)
+
+
+async def grant_candidate_permissions_to_role(session: AsyncSession, role_id: int) -> int:
+    """Make the candidate role hold EXACTLY CANDIDATE_PERMISSION_CODES.
+
+    Thin wrapper over :func:`grant_permissions_to_role` kept for backwards
+    compatibility.
+    """
+    return await grant_permissions_to_role(session, role_id, CANDIDATE_PERMISSION_CODES)
+
+
 async def ensure_admin_user(
     session: AsyncSession, email: str, password: str, portal_id: int
 ) -> tuple[User, bool]:
-    existing = (
-        await session.execute(select(User).where(User.email == email))
-    ).scalar_one_or_none()
+    existing = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if existing is not None:
         return existing, False
     user = User(
@@ -186,12 +357,8 @@ async def ensure_admin_user(
     return user, True
 
 
-async def assign_role_to_user(
-    session: AsyncSession, user_id: int, role_id: int
-) -> None:
-    stmt = pg_insert(UserRole).values(
-        user_id=user_id, role_id=role_id, is_active=True
-    )
+async def assign_role_to_user(session: AsyncSession, user_id: int, role_id: int) -> None:
+    stmt = pg_insert(UserRole).values(user_id=user_id, role_id=role_id, is_active=True)
     stmt = stmt.on_conflict_do_update(
         index_elements=[UserRole.user_id, UserRole.role_id],
         set_={"is_active": True},
@@ -199,9 +366,7 @@ async def assign_role_to_user(
     await session.execute(stmt)
 
 
-async def bootstrap_admin(
-    session: AsyncSession, email: str, password: str
-) -> BootstrapResult:
+async def bootstrap_admin(session: AsyncSession, email: str, password: str) -> BootstrapResult:
     """Sync permissions, ensure the admin role with all grants, and the admin user."""
     portal = await ParameterRepository(session).get_by_type_and_code(
         "user_portal", ADMIN_PORTAL_CODE
@@ -221,13 +386,37 @@ async def bootstrap_admin(
     candidate_role = await ensure_candidate_role(session)
     await grant_candidate_permissions_to_role(session, candidate_role.id)
 
-    # Ensure other standard roles exist
-    for rname in ["Talento Humano", "Comercial", "Proyecto"]:
+    # Internal staff roles — created idempotently and granted their exact allowlists
+    # (both the permission-code allowlist and the org.parameters TYPE allowlist).
+    _internal_roles: list[tuple[str, str, frozenset[str], frozenset[str]]] = [
+        (
+            TALENTO_HUMANO_ROLE_NAME,
+            "HR and recruitment management",
+            TALENTO_HUMANO_PERMISSION_CODES,
+            TALENTO_HUMANO_PARAMETER_TYPES,
+        ),
+        (
+            COMERCIAL_ROLE_NAME,
+            "Commercial team — client-driven recruitment",
+            COMERCIAL_PERMISSION_CODES,
+            COMERCIAL_PARAMETER_TYPES,
+        ),
+        (
+            PROYECTO_ROLE_NAME,
+            "Project team — delivery-side recruitment",
+            PROYECTO_PERMISSION_CODES,
+            PROYECTO_PARAMETER_TYPES,
+        ),
+    ]
+    for rname, rdesc, rcodes, rparam_types in _internal_roles:
         stmt = select(Role).where(Role.name == rname).where(Role.is_active.is_(True))
-        existing_role = (await session.execute(stmt)).scalar_one_or_none()
-        if existing_role is None:
-            session.add(Role(name=rname, description=f"Rol de {rname}"))
-    await session.flush()
+        internal_role = (await session.execute(stmt)).scalar_one_or_none()
+        if internal_role is None:
+            internal_role = Role(name=rname, description=rdesc)
+            session.add(internal_role)
+            await session.flush()
+        await grant_permissions_to_role(session, internal_role.id, rcodes)
+        await grant_parameter_types_to_role(session, internal_role.id, set(rparam_types))
 
     return BootstrapResult(
         permissions_synced=permissions,

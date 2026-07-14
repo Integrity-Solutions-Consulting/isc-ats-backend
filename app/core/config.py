@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     # (fail-open). Off by default so local dev and tests run without real keys.
     # The secret key is verified server-side against siteverify; it must live in
     # an env var (Dokploy), never in code. The site key is public and lives in the
-    # frontend (NEXT_PUBLIC_TURNSTILE_SITE_KEY).
+    # frontend (TURNSTILE_SITE_KEY, server-only, read at runtime).
     turnstile_enabled: bool = False
     turnstile_secret_key: str = ""
     turnstile_verify_url: str = (

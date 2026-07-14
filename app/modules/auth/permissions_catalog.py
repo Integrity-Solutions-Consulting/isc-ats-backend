@@ -64,6 +64,14 @@ PERMISSION_CATALOG: tuple[PermissionSpec, ...] = (
     *_specs("auth", "menu_items", "menu items", _CRUD),
     # recruitment bounded context
     *_specs("recruitment", "vacancies", "vacancies", _CRUD),
+    # Publish action: controls whether a vacancy is publicly visible on the candidate
+    # portal. Separate from CRUD so that Comercial/Proyecto/TH can publish without
+    # necessarily holding admin-level delete rights.
+    PermissionSpec(
+        code="recruitment.vacancies.publish",
+        name="Publish vacancy",
+        module="recruitment",
+    ),
     # Narrow candidate-facing read: stage names only (no client/contact/PII). Split
     # out from the coarse vacancies.read so the candidate role isn't handed a staff
     # permission that also unlocks pipeline/documents/client info.

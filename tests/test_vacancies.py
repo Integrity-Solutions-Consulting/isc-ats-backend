@@ -22,7 +22,6 @@ from app.modules.recruitment.application.vacancies_service import (
     VacancyReferenceError,
     VacancyService,
 )
-from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.applications_repository import (
     ApplicationRepository,
 )
@@ -32,6 +31,7 @@ from app.modules.recruitment.infrastructure.pipeline_repository import PipelineR
 from app.shared.repository import BaseRepository
 
 ACTOR = CurrentUser(user_id=1, ip="127.0.0.1")
+_CAN_PUBLISH: set[str] = {"recruitment.vacancies.publish", "recruitment.vacancies.create"}
 
 
 def _service(session: AsyncSession) -> VacancyService:
@@ -105,9 +105,12 @@ async def test_create_vacancy_rejects_unknown_company(session: AsyncSession) -> 
 
 
 async def test_create_vacancy_rejects_unknown_parameter(session: AsyncSession) -> None:
+    # A publisher providing an invalid status_id must still get a VacancyReferenceError.
+    # Non-publishers have status_id overridden before validation (solicitud-forcing), so
+    # this test uses a publisher caller to exercise the validation path.
     data = await _valid_payload(session, status_id=999999)
     with pytest.raises(VacancyReferenceError):
-        await _service(session).create(data, ACTOR)
+        await _service(session).create(data, ACTOR, caller_permission_codes=_CAN_PUBLISH)
 
 
 async def test_update_vacancy_validates_changed_ref(session: AsyncSession) -> None:
@@ -129,7 +132,9 @@ async def test_pipeline_returns_stages_and_cards(session: AsyncSession) -> None:
     )
     dept = await BaseRepository(session, Department).add(Department(name="Eng"))
     process = await BaseRepository(session, Process).add(
-        Process(client_company_id=company.id, department_id=dept.id, name=f"P{uuid.uuid4().hex[:6]}")
+        Process(
+            client_company_id=company.id, department_id=dept.id, name=f"P{uuid.uuid4().hex[:6]}"
+        )
     )
     await BaseRepository(session, ProcessStage).add(
         ProcessStage(process_id=process.id, stage_id=param.id, order=1, is_final_positive=False)
@@ -205,10 +210,14 @@ async def test_pipeline_hired_count_increments_when_candidate_reaches_final_posi
     )
     dept = await BaseRepository(session, Department).add(Department(name="Ops"))
     process = await BaseRepository(session, Process).add(
-        Process(client_company_id=company.id, department_id=dept.id, name=f"P{uuid.uuid4().hex[:6]}")
+        Process(
+            client_company_id=company.id, department_id=dept.id, name=f"P{uuid.uuid4().hex[:6]}"
+        )
     )
     final_stage = await BaseRepository(session, ProcessStage).add(
-        ProcessStage(process_id=process.id, stage_id=stage_param.id, order=1, is_final_positive=True)
+        ProcessStage(
+            process_id=process.id, stage_id=stage_param.id, order=1, is_final_positive=True
+        )
     )
     vacancy = await BaseRepository(session, Vacancy).add(
         Vacancy(
@@ -243,7 +252,9 @@ async def test_pipeline_hired_count_increments_when_candidate_reaches_final_posi
         ParameterRepository(session),
     )
     app = await app_service.create(
-        ApplicationCreate(vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=stage_param.id),
+        ApplicationCreate(
+            vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=stage_param.id
+        ),
         ACTOR,
     )
 
@@ -252,7 +263,9 @@ async def test_pipeline_hired_count_increments_when_candidate_reaches_final_posi
 
     pipeline = await PipelineRepository(session).get_pipeline(vacancy.id)
 
-    assert pipeline.hired_count == 1, "hired_count must be 1 when one candidate is in the final positive stage"
+    assert pipeline.hired_count == 1, (
+        "hired_count must be 1 when one candidate is in the final positive stage"
+    )
     assert pipeline.openings == 2, "openings must match the vacancy.openings field"
 
 
@@ -274,13 +287,19 @@ async def test_vacancy_stages_returns_ordered_stages(session: AsyncSession) -> N
     )
     dept = await BaseRepository(session, Department).add(Department(name="Ops"))
     process = await BaseRepository(session, Process).add(
-        Process(client_company_id=company.id, department_id=dept.id, name=f"P{uuid.uuid4().hex[:6]}")
+        Process(
+            client_company_id=company.id, department_id=dept.id, name=f"P{uuid.uuid4().hex[:6]}"
+        )
     )
     await BaseRepository(session, ProcessStage).add(
-        ProcessStage(process_id=process.id, stage_id=stage_param_a.id, order=1, is_final_positive=False)
+        ProcessStage(
+            process_id=process.id, stage_id=stage_param_a.id, order=1, is_final_positive=False
+        )
     )
     await BaseRepository(session, ProcessStage).add(
-        ProcessStage(process_id=process.id, stage_id=stage_param_b.id, order=2, is_final_positive=True)
+        ProcessStage(
+            process_id=process.id, stage_id=stage_param_b.id, order=2, is_final_positive=True
+        )
     )
     vacancy = await BaseRepository(session, Vacancy).add(
         Vacancy(

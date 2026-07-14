@@ -99,6 +99,27 @@ class RolePermission(Base, AuditMixin, SoftDeleteMixin):
     )
 
 
+class RoleParameterTypeGrant(Base, AuditMixin, SoftDeleteMixin):
+    """auth.role_parameter_type_grants — junction granting a role write access to
+    an org.parameters catalog type (org.parameters.type).
+
+    Composite primary key (role_id, parameter_type); no surrogate id. Unlike
+    RolePermission, `parameter_type` is a plain string, not a foreign key —
+    org.parameters.type is not backed by a modeled entity anywhere in the schema
+    (see Parameter.type in app.modules.org.infrastructure.models), so there is
+    nothing to reference.
+    """
+
+    __tablename__ = "role_parameter_type_grants"
+    __table_args__ = {"schema": "auth"}
+
+    role_id: Mapped[int] = mapped_column(
+        ForeignKey("auth.roles.id", deferrable=True, initially="IMMEDIATE"),
+        primary_key=True,
+    )
+    parameter_type: Mapped[str] = mapped_column(String(50), primary_key=True)
+
+
 class UserRole(Base, AuditMixin, SoftDeleteMixin):
     """auth.user_roles — junction assigning a role to a user.
 

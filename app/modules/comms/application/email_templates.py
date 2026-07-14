@@ -293,7 +293,7 @@ def render_interview_invitation_email(
     subject = f"Invitación a entrevista — {vacancy_name}"
     text_body = (
         f"{greeting}\n\n"
-        f"Te invitamos a una entrevista para la vacante \"{vacancy_name}\".\n\n"
+        f'Te invitamos a una entrevista para la vacante "{vacancy_name}".\n\n'
         f"Fecha y hora: {when} (hora de Ecuador)\n"
         f"Enlace de la reunión (Microsoft Teams): {join_url}\n\n"
         "Te esperamos. Gracias por tu interés en Integrity Solutions."
@@ -367,7 +367,7 @@ def render_stage_change_email(
 
     text_body = (
         f"{greeting}\n\n"
-        f"Tu postulación para la vacante \"{vacancy_name}\" ahora se encuentra en "
+        f'Tu postulación para la vacante "{vacancy_name}" ahora se encuentra en '
         f"la etapa: {stage_name}.\n\n"
         "Te contactaremos con los próximos pasos. Gracias por tu interés en "
         "Integrity Solutions."
@@ -522,9 +522,7 @@ def render_interview_slot_offer_email(
     return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
 
 
-def render_rejection_email(
-    candidate_first_name: str, vacancy_name: str
-) -> RenderedEmail:
+def render_rejection_email(candidate_first_name: str, vacancy_name: str) -> RenderedEmail:
     """Rejection notification for a candidate (Spanish, Ecuador).
 
     Professional, empathetic wording explaining the candidate does not meet the
@@ -537,7 +535,7 @@ def render_rejection_email(
 
     text_body = (
         f"{greeting}\n\n"
-        f"Agradecemos tu interés en la vacante \"{vacancy_name}\" y el tiempo que "
+        f'Agradecemos tu interés en la vacante "{vacancy_name}" y el tiempo que '
         "dedicaste al proceso de selección.\n\n"
         "Después de revisar cuidadosamente los perfiles, en esta ocasión hemos "
         "decidido avanzar con candidatos cuyo perfil se ajusta más a los "
@@ -616,17 +614,13 @@ def render_slot_confirmed_email(
     """
     local = scheduled_at if scheduled_at.tzinfo else scheduled_at.replace(tzinfo=UTC)
     when = local.astimezone(_EC_TZ).strftime("%d/%m/%Y %H:%M")
-    greeting = (
-        f"Hola {interviewer_first_name},"
-        if interviewer_first_name
-        else "Hola,"
-    )
+    greeting = f"Hola {interviewer_first_name}," if interviewer_first_name else "Hola,"
 
     subject = f"Entrevista confirmada — {candidate_full_name} · {vacancy_name}"
     text_body = (
         f"{greeting}\n\n"
         f"El candidato {candidate_full_name} ha confirmado su horario de entrevista "
-        f"para la vacante \"{vacancy_name}\".\n\n"
+        f'para la vacante "{vacancy_name}".\n\n'
         f"Fecha y hora: {when} (hora de Ecuador)\n"
     )
     if join_url:
@@ -697,6 +691,7 @@ def render_slot_confirmed_email(
 def render_random_password_email(email: str, password_raw: str) -> RenderedEmail:
     """Random password email for a new staff user."""
     from app.core.config import settings
+
     subject = "Tu cuenta ha sido creada — Integrity Solutions"
     login_url = f"{settings.frontend_base_url}/login"
 
@@ -752,6 +747,87 @@ def render_random_password_email(email: str, password_raw: str) -> RenderedEmail
                 </table>
                 <p style="margin:24px 0 0;font-size:13px;color:#6b7280;">
                   Si no reconoces este correo o no solicitaste la creación de esta cuenta, por favor contacta con soporte.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>"""
+
+    return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
+
+
+def render_solicitud_created_email(recipient_email: str, vacancy_title: str) -> RenderedEmail:
+    """Notification email sent to all active Talento Humano users when a solicitud is created.
+
+    Parameters
+    ----------
+    recipient_email:
+        The TH user's email address — used to personalise the greeting.
+    vacancy_title:
+        The human-readable vacancy name resolved from the org.parameters catalog.
+    """
+    from app.core.config import settings  # noqa: PLC0415
+
+    subject = f"Nueva solicitud de vacante: {vacancy_title} — Integrity Solutions"
+    portal_url = f"{settings.frontend_base_url}/vacancies"
+
+    text_body = (
+        "Hola,\n\n"
+        "Se ha creado una nueva solicitud de vacante en el sistema de reclutamiento de "
+        "Integrity Solutions.\n\n"
+        f"Vacante: {vacancy_title}\n\n"
+        "Ingresá al portal para revisar y gestionar esta solicitud:\n"
+        f"{portal_url}\n\n"
+        "Este correo fue generado automáticamente."
+    )
+
+    html_body = f"""\
+<!DOCTYPE html>
+<html lang="es">
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="background:{_PRIMARY};padding:24px 32px;color:#ffffff;font-size:18px;font-weight:bold;">
+                Integrity Solutions
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;color:#111827;">
+                <h1 style="margin:0 0 12px;font-size:22px;">Nueva solicitud de vacante</h1>
+                <p style="margin:0 0 20px;font-size:15px;line-height:1.5;color:#374151;">
+                  Se ha registrado una nueva solicitud de vacante que requiere tu atención.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%"
+                       style="margin:0 0 24px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;padding:16px 20px;color:#111827;font-size:15px;line-height:1.6;">
+                  <tr>
+                    <td>
+                      <strong>Vacante:</strong> {vacancy_title}
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 24px;font-size:15px;line-height:1.5;color:#374151;">
+                  Ingresá al portal de reclutamiento para revisar los detalles y gestionar esta solicitud.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td style="border-radius:8px;background:{_PRIMARY};">
+                      <a href="{portal_url}"
+                         style="display:inline-block;padding:14px 28px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:bold;">
+                        Ver solicitud en el portal
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:24px 0 0;font-size:13px;color:#6b7280;">
+                  Este correo fue generado automáticamente por el sistema de reclutamiento de
+                  Integrity Solutions.
                 </p>
               </td>
             </tr>

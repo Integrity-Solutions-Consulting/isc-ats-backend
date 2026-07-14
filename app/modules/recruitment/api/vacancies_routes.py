@@ -1,11 +1,21 @@
 import io
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
+from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUserDep, SessionDep
-from app.modules.auth.api.authorization import require_any_permission, require_permission
+from app.core.task_queue import TaskQueueDep, register_task
+from app.modules.auth.api.authorization import (
+    PermissionCodesDep,
+    require_any_permission,
+    require_permission,
+)
+from app.modules.auth.application.bootstrap_service import TALENTO_HUMANO_ROLE_NAME
+from app.modules.comms.application.email_templates import render_solicitud_created_email
+from app.modules.comms.application.notifications_service import notify_role
 from app.modules.org.infrastructure.models import (
     ClientCompany,
     Contact,
@@ -14,6 +24,7 @@ from app.modules.org.infrastructure.models import (
     Process,
     ProfileTemplate,
 )
+from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.application_notes_schemas import _author_name_from_email
 from app.modules.recruitment.api.vacancies_schemas import (
     PipelineCardSchema,
@@ -32,6 +43,8 @@ from app.modules.recruitment.application.vacancies_service import (
     VacancyCloseError,
     VacancyInUseError,
     VacancyNotFoundError,
+    VacancyProcessRequiredError,
+    VacancyPublishForbiddenError,
     VacancyReferenceError,
     VacancyService,
 )
@@ -49,10 +62,55 @@ from app.shared.ownership import forbid_candidate_portal
 from app.shared.pagination import Page, PageParams
 from app.shared.repository import BaseRepository
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/vacancies", tags=["recruitment · vacancies"])
 
 
+async def _notify_solicitud_created(vacancy_id: int) -> None:
+    """Background task: fan-out in-app + email notifications to all active Talento Humano users.
+
+    Opens its own DB session (the request session is already closed by the time
+    this runs). Resolves the vacancy name from the catalog, then calls notify_role
+    with email_render so every active TH user receives both an in-app notification
+    and an email.
+
+    Never propagates exceptions — a failed notification must not affect the
+    already-committed vacancy creation.
+    """
+    async with async_session_factory() as session:
+        try:
+            vacancy = await BaseRepository(session, Vacancy).get(vacancy_id, include_inactive=True)
+            if vacancy is None:
+                logger.warning("_notify_solicitud_created: vacancy %s not found", vacancy_id)
+                return
+            # Resolve the human-readable vacancy name from the catalog.
+            params = ParameterRepository(session)
+            vacancy_name_param = await params.get(vacancy.vacancy_name_id, include_inactive=True)
+            vacancy_title = vacancy_name_param.name if vacancy_name_param is not None else "Vacante"
+
+            await notify_role(
+                session,
+                role_name=TALENTO_HUMANO_ROLE_NAME,
+                title="Nueva solicitud de vacante",
+                body=f"Se creó una nueva solicitud: {vacancy_title}.",
+                related_entity_type="vacancy",
+                related_entity_id=vacancy_id,
+                email_render=lambda email, _title: render_solicitud_created_email(
+                    email, vacancy_title
+                ),
+            )
+            await session.commit()
+        except Exception:
+            logger.exception("Failed to notify solicitud created for vacancy %s", vacancy_id)
+            await session.rollback()
+
+
+register_task("notify_solicitud_created", _notify_solicitud_created)
+
+
 # ── Public endpoints (no authentication required) ─────────────────────────────
+
 
 @router.get(
     "/public",
@@ -88,6 +146,7 @@ async def list_vacancies_public(
             description=v.description,
             profile_requirements=v.profile_requirements,
             created_at=v.created_at,
+            updated_at=v.updated_at,
         )
         for v in items
     ]
@@ -120,10 +179,12 @@ async def get_vacancy_public(vacancy_id: int, session: SessionDep) -> PublicVaca
         description=item.description,
         profile_requirements=item.profile_requirements,
         created_at=item.created_at,
+        updated_at=item.updated_at,
     )
 
 
 # ── Authenticated endpoints ────────────────────────────────────────────────────
+
 
 def get_service(session: SessionDep) -> VacancyService:
     applications = ApplicationUsageRepository(session)
@@ -168,9 +229,7 @@ async def list_vacancies_expanded(
         department_id=department_id,
         include_inactive=include_inactive,
     )
-    return Page.create(
-        [VacancyListItem(**vars(item)) for item in items], total, params
-    )
+    return Page.create([VacancyListItem(**vars(item)) for item in items], total, params)
 
 
 @router.get(
@@ -220,12 +279,30 @@ async def get_vacancy(
     dependencies=[Depends(require_permission("recruitment.vacancies.create"))],
 )
 async def create_vacancy(
-    data: VacancyCreate, service: ServiceDep, current_user: CurrentUserDep
+    data: VacancyCreate,
+    service: ServiceDep,
+    current_user: CurrentUserDep,
+    caller_codes: PermissionCodesDep,
+    task_queue: TaskQueueDep,
+    session: SessionDep,
 ) -> VacancyRead:
     try:
-        created = await service.create(data, current_user)
+        created = await service.create(data, current_user, caller_permission_codes=caller_codes)
+    except VacancyPublishForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except VacancyProcessRequiredError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except VacancyReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # Notify Talento Humano only when the vacancy was created as a solicitud
+    # (non-publisher path — Comercial/Proyecto). Publisher-created active vacancies
+    # do not trigger fan-out.
+    params_repo = ParameterRepository(session)
+    vacancy_status_param = await params_repo.get(created.status_id, include_inactive=True)
+    if vacancy_status_param is not None and vacancy_status_param.code == "solicitud":
+        await task_queue.enqueue("notify_solicitud_created", created.id)
+
     return VacancyRead.model_validate(created)
 
 
@@ -239,11 +316,18 @@ async def update_vacancy(
     data: VacancyUpdate,
     service: ServiceDep,
     current_user: CurrentUserDep,
+    caller_codes: PermissionCodesDep,
 ) -> VacancyRead:
     try:
-        updated = await service.update(vacancy_id, data, current_user)
+        updated = await service.update(
+            vacancy_id, data, current_user, caller_permission_codes=caller_codes
+        )
     except VacancyNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except VacancyPublishForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except VacancyProcessRequiredError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except VacancyReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except VacancyCloseError as exc:
@@ -304,9 +388,7 @@ async def get_vacancy_stages(vacancy_id: int, session: SessionDep) -> list[Vacan
     "/{vacancy_id}/generate-poster",
     dependencies=[Depends(require_permission("recruitment.vacancies.read"))],
 )
-async def generate_poster(
-    vacancy_id: int, current_user: CurrentUserDep
-) -> StreamingResponse:
+async def generate_poster(vacancy_id: int, current_user: CurrentUserDep) -> StreamingResponse:
     forbid_candidate_portal(current_user)
     try:
         image_bytes = await generate_vacancy_poster(vacancy_id)
@@ -335,9 +417,14 @@ async def get_vacancy_documents(
     rows = await PipelineRepository(session).get_vacancy_documents(vacancy_id)
 
     avatar_colors = [
-        "bg-primary-600", "bg-accent-500", "bg-primary-400",
-        "bg-primary-700", "bg-accent-600", "bg-primary-300",
-        "bg-accent-400", "bg-primary-500",
+        "bg-primary-600",
+        "bg-accent-500",
+        "bg-primary-400",
+        "bg-primary-700",
+        "bg-accent-600",
+        "bg-primary-300",
+        "bg-accent-400",
+        "bg-primary-500",
     ]
 
     # Build version map per candidate (count docs ascending by date → version number)
@@ -357,21 +444,23 @@ async def get_vacancy_documents(
         author = _author_name_from_email(row.author_email)
         fname = row.original_name or f"perfil_{row.application_id}.docx"
 
-        items.append(VacancyDocumentItem(
-            id=row.id,
-            application_id=row.application_id,
-            candidate_id=row.candidate_id,
-            candidate_name=f"{row.first_name} {row.last_name}",
-            candidate_initials=initials,
-            candidate_avatar_color=color,
-            stage_name_at_generation=row.stage_name,
-            file_name=fname,
-            file_id=row.file_id,
-            stored_key=row.stored_key,
-            version=ver,
-            generated_by=author,
-            generated_at=row.created_at,
-        ))
+        items.append(
+            VacancyDocumentItem(
+                id=row.id,
+                application_id=row.application_id,
+                candidate_id=row.candidate_id,
+                candidate_name=f"{row.first_name} {row.last_name}",
+                candidate_initials=initials,
+                candidate_avatar_color=color,
+                stage_name_at_generation=row.stage_name,
+                file_name=fname,
+                file_id=row.file_id,
+                stored_key=row.stored_key,
+                version=ver,
+                generated_by=author,
+                generated_at=row.created_at,
+            )
+        )
 
     return items
 
@@ -388,9 +477,14 @@ async def get_vacancy_pipeline(
     data = await PipelineRepository(session).get_pipeline(vacancy_id)
 
     avatar_colors = [
-        "bg-primary-600", "bg-accent-500", "bg-primary-400",
-        "bg-primary-700", "bg-accent-600", "bg-primary-300",
-        "bg-accent-400", "bg-primary-500",
+        "bg-primary-600",
+        "bg-accent-500",
+        "bg-primary-400",
+        "bg-primary-700",
+        "bg-accent-600",
+        "bg-primary-300",
+        "bg-accent-400",
+        "bg-primary-500",
     ]
 
     # Expose a sequential 1..N display position instead of the stored sort key:
@@ -410,13 +504,15 @@ async def get_vacancy_pipeline(
     # Virtual "Rechazado" stage — always appended last so the board always shows it.
     # BUG-22: Note that stageId="rejected" is a sentinel string recognized by the
     # frontend to render the rejected candidates column.
-    stages.append(PipelineStageSchema(
-        id="rejected",
-        vacancyId=str(vacancy_id),
-        name="Rechazados",
-        order=len(stages) + 1,
-        type="rejected",
-    ))
+    stages.append(
+        PipelineStageSchema(
+            id="rejected",
+            vacancyId=str(vacancy_id),
+            name="Rechazados",
+            order=len(stages) + 1,
+            type="rejected",
+        )
+    )
 
     cards = [
         PipelineCardSchema(

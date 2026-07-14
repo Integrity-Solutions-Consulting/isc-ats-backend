@@ -14,7 +14,7 @@ from app.modules.org.application.profile_templates_service import (
     ProfileTemplateNotFoundError,
     ProfileTemplateService,
 )
-from app.modules.org.infrastructure.models import ProfileTemplate
+from app.modules.org.infrastructure.models import ProfileTemplate, ProfileTemplateItem
 from app.modules.recruitment.infrastructure.vacancy_usage_repository import (
     VacancyUsageRepository,
 )
@@ -28,9 +28,8 @@ def get_service(session: SessionDep) -> ProfileTemplateService:
     usage = VacancyUsageRepository(session)
     return ProfileTemplateService(
         BaseRepository(session, ProfileTemplate),
-        in_use_checker=lambda tid: usage.is_referenced_by_live_vacancy(
-            "profile_template_id", tid
-        ),
+        in_use_checker=lambda tid: usage.is_referenced_by_live_vacancy("profile_template_id", tid),
+        items_repository=BaseRepository(session, ProfileTemplateItem),
     )
 
 
@@ -57,9 +56,7 @@ async def list_profile_templates(
     response_model=ProfileTemplateRead,
     dependencies=[Depends(require_permission("org.profile_templates.read"))],
 )
-async def get_profile_template(
-    template_id: int, service: ServiceDep
-) -> ProfileTemplateRead:
+async def get_profile_template(template_id: int, service: ServiceDep) -> ProfileTemplateRead:
     try:
         return ProfileTemplateRead.model_validate(await service.get(template_id))
     except ProfileTemplateNotFoundError as exc:
@@ -109,3 +106,19 @@ async def delete_profile_template(template_id: int, service: ServiceDep) -> None
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except ProfileTemplateInUseError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+@router.post(
+    "/{template_id}/copy",
+    response_model=ProfileTemplateRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("org.profile_templates.create"))],
+)
+async def copy_profile_template(
+    template_id: int, service: ServiceDep, current_user: CurrentUserDep
+) -> ProfileTemplateRead:
+    try:
+        copy = await service.copy(template_id, current_user)
+    except ProfileTemplateNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return ProfileTemplateRead.model_validate(copy)
