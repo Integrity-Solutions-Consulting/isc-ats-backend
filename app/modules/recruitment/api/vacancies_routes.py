@@ -13,9 +13,8 @@ from app.modules.auth.api.authorization import (
     require_any_permission,
     require_permission,
 )
-from app.modules.auth.application.bootstrap_service import TALENTO_HUMANO_ROLE_NAME
 from app.modules.comms.application.email_templates import render_solicitud_created_email
-from app.modules.comms.application.notifications_service import notify_role
+from app.modules.comms.application.notifications_service import notify_permission_holders
 from app.modules.org.infrastructure.models import (
     ClientCompany,
     Contact,
@@ -68,12 +67,14 @@ router = APIRouter(prefix="/vacancies", tags=["recruitment · vacancies"])
 
 
 async def _notify_solicitud_created(vacancy_id: int) -> None:
-    """Background task: fan-out in-app + email notifications to all active Talento Humano users.
+    """Background task: fan-out in-app + email notifications to everyone who can publish.
 
     Opens its own DB session (the request session is already closed by the time
-    this runs). Resolves the vacancy name from the catalog, then calls notify_role
-    with email_render so every active TH user receives both an in-app notification
-    and an email.
+    this runs). Resolves the vacancy name from the catalog, then calls
+    notify_permission_holders for recruitment.vacancies.publish with email_render
+    so every active user who can complete/publish a solicitud (Talento Humano
+    today; any future role granted the same permission automatically, with no
+    code change) receives both an in-app notification and an email.
 
     Never propagates exceptions — a failed notification must not affect the
     already-committed vacancy creation.
@@ -89,9 +90,9 @@ async def _notify_solicitud_created(vacancy_id: int) -> None:
             vacancy_name_param = await params.get(vacancy.vacancy_name_id, include_inactive=True)
             vacancy_title = vacancy_name_param.name if vacancy_name_param is not None else "Vacante"
 
-            await notify_role(
+            await notify_permission_holders(
                 session,
-                role_name=TALENTO_HUMANO_ROLE_NAME,
+                permission_code="recruitment.vacancies.publish",
                 title="Nueva solicitud de vacante",
                 body=f"Se creó una nueva solicitud: {vacancy_title}.",
                 related_entity_type="vacancy",

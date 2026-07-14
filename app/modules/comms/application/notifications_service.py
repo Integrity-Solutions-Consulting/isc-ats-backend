@@ -6,7 +6,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import CurrentUser
-from app.modules.auth.infrastructure.models import Role, User, UserRole
+from app.modules.auth.infrastructure.models import (
+    Permission,
+    Role,
+    RolePermission,
+    User,
+    UserRole,
+)
 from app.modules.comms.api.notifications_schemas import NotificationCreate
 from app.modules.comms.application.email_dispatch_service import EmailDispatchService
 from app.modules.comms.application.email_sender import EmailMessage
@@ -20,21 +26,24 @@ from app.shared.repository import BaseRepository
 logger = logging.getLogger(__name__)
 
 
-async def notify_role(
+async def notify_permission_holders(
     session: AsyncSession,
     *,
-    role_name: str,
+    permission_code: str,
     title: str,
     body: str,
     related_entity_type: str,
     related_entity_id: int,
     email_render: Callable[[str, str], RenderedEmail] | None = None,
 ) -> int:
-    """Fan-out: insert one in-app Notification per active user of the named role.
+    """Fan-out: insert one in-app Notification per active user holding *permission_code*.
 
-    Resolves the role by NAME (never by id — ids differ per environment), selects
-    only users where UserRole.is_active AND User.is_active are both True, and
-    inserts exactly one Notification per matching user.
+    Resolves recipients by PERMISSION, not by a hardcoded role name — walks
+    user_roles -> roles -> role_permissions -> permissions, honouring is_active on
+    every hop, so any role granted this permission (today or added later from the
+    Roles screen) automatically starts receiving the notification with no code
+    change. A user is counted once even if multiple of their roles grant the
+    permission (DISTINCT).
 
     If ``email_render`` is provided, dispatches one email per notified user via
     ``EmailDispatchService``.  Each email dispatch is wrapped in its own try/except
@@ -43,22 +52,17 @@ async def notify_role(
 
     Returns the count of users notified (in-app Notification rows inserted).
     """
-    # Resolve role by name — never hardcode an id.
-    role_row = (
-        await session.execute(
-            select(Role).where(Role.name == role_name).where(Role.is_active.is_(True))
-        )
-    ).scalar_one_or_none()
-
-    if role_row is None:
-        logger.warning("notify_role: role '%s' not found — no notifications sent", role_name)
-        return 0
-
-    # Fetch all active users that hold an active assignment to this role.
     stmt = (
         select(User)
+        .distinct()
         .join(UserRole, UserRole.user_id == User.id)
-        .where(UserRole.role_id == role_row.id)
+        .join(Role, Role.id == UserRole.role_id)
+        .join(RolePermission, RolePermission.role_id == Role.id)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .where(Permission.code == permission_code)
+        .where(Permission.is_active.is_(True))
+        .where(RolePermission.is_active.is_(True))
+        .where(Role.is_active.is_(True))
         .where(UserRole.is_active.is_(True))
         .where(User.is_active.is_(True))
     )
@@ -97,7 +101,8 @@ async def notify_role(
                 )
             except Exception:
                 logger.exception(
-                    "notify_role: email dispatch failed for user %s — swallowed", user.id
+                    "notify_permission_holders: email dispatch failed for user %s — swallowed",
+                    user.id,
                 )
 
     return len(users)

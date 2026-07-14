@@ -1,9 +1,14 @@
-"""Slice 4 — Notify fan-out to Talento Humano when a solicitud is created.
+"""Slice 4 — Notify fan-out to recruitment.vacancies.publish holders on solicitud creation.
 
-Tasks 4.1-4.8 (spec R7):
-  4.1  notify_role signature importable from notifications_service
-  4.2  notify_role inserts N in-app Notifications — only active TH users (integration)
-  4.3  notify_role dispatches one email per notified user when email_render provided
+Tasks 4.1-4.8 (spec R7), updated for the permission-based fan-out (was role-name
+based — notify_role(role_name="Talento Humano") hardcoded a single role; now
+notify_permission_holders(permission_code="recruitment.vacancies.publish") notifies
+whoever holds the permission, so a future role granted it needs no code change):
+  4.1  notify_permission_holders signature importable from notifications_service
+  4.2  notify_permission_holders inserts N in-app Notifications — only active
+       publish-permission holders (integration)
+  4.3  notify_permission_holders dispatches one email per notified user when
+       email_render provided
   4.4  SMTPException on one user is swallowed; others still notified (no 5xx)
   4.5  render_solicitud_created_email is importable from email_templates
   4.6  render_solicitud_created_email returns non-empty HTML containing the vacancy title
@@ -23,22 +28,24 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # ---------------------------------------------------------------------------
-# 4.1 — notify_role is importable with the correct signature
+# 4.1 — notify_permission_holders is importable with the correct signature
 # ---------------------------------------------------------------------------
 
 
-def test_notify_role_is_importable() -> None:
-    """notify_role must be importable from notifications_service."""
+def test_notify_permission_holders_is_importable() -> None:
+    """notify_permission_holders must be importable from notifications_service."""
     import inspect  # noqa: PLC0415
 
-    from app.modules.comms.application.notifications_service import notify_role  # noqa: PLC0415
+    from app.modules.comms.application.notifications_service import (  # noqa: PLC0415
+        notify_permission_holders,
+    )
 
-    assert callable(notify_role)
-    sig = inspect.signature(notify_role)
+    assert callable(notify_permission_holders)
+    sig = inspect.signature(notify_permission_holders)
     params = list(sig.parameters)
     # First param is the session (positional); rest are keyword-only
     assert "session" in params
-    assert "role_name" in params
+    assert "permission_code" in params
     assert "title" in params
     assert "body" in params
     assert "related_entity_type" in params
@@ -135,23 +142,31 @@ async def _seed_th_users(
 
 
 # ---------------------------------------------------------------------------
-# 4.2 — notify_role inserts exactly N Notifications for active TH users
+# 4.2 — notify_permission_holders inserts exactly N Notifications for active
+# recruitment.vacancies.publish holders
 # ---------------------------------------------------------------------------
 
 
-async def test_notify_role_notifies_active_users_only(session: AsyncSession) -> None:
-    """4 active TH + 2 inactive TH → exactly 4 in-app Notifications (spec R7.5/R7.6)."""
-    from app.modules.auth.application.bootstrap_service import (
-        TALENTO_HUMANO_ROLE_NAME,  # noqa: PLC0415
+async def test_notify_permission_holders_notifies_active_users_only(
+    session: AsyncSession,
+) -> None:
+    """4 active TH + 2 inactive TH → exactly 4 in-app Notifications (spec R7.5/R7.6).
+
+    TH is used here only as a convenient role that holds
+    recruitment.vacancies.publish — the function itself resolves by permission,
+    not by role name (see test_notify_permission_holders_excludes_other_roles for
+    the exclusion side of this).
+    """
+    from app.modules.comms.application.notifications_service import (  # noqa: PLC0415
+        notify_permission_holders,
     )
-    from app.modules.comms.application.notifications_service import notify_role  # noqa: PLC0415
     from app.modules.comms.infrastructure.models import Notification  # noqa: PLC0415
 
     active, _inactive = await _seed_th_users(session, active_count=4, inactive_count=2)
 
-    count = await notify_role(
+    count = await notify_permission_holders(
         session,
-        role_name=TALENTO_HUMANO_ROLE_NAME,
+        permission_code="recruitment.vacancies.publish",
         title="Nueva solicitud",
         body="Se creó una nueva solicitud de vacante.",
         related_entity_type="vacancy",
@@ -183,18 +198,17 @@ async def test_notify_role_notifies_active_users_only(session: AsyncSession) -> 
     )
 
 
-async def test_notify_role_zero_active_users(session: AsyncSession) -> None:
+async def test_notify_permission_holders_zero_active_users(session: AsyncSession) -> None:
     """0 active + 2 inactive TH → 0 notifications, no error (spec R7.5)."""
-    from app.modules.auth.application.bootstrap_service import (
-        TALENTO_HUMANO_ROLE_NAME,  # noqa: PLC0415
+    from app.modules.comms.application.notifications_service import (  # noqa: PLC0415
+        notify_permission_holders,
     )
-    from app.modules.comms.application.notifications_service import notify_role  # noqa: PLC0415
 
     await _seed_th_users(session, active_count=0, inactive_count=2)
 
-    count = await notify_role(
+    count = await notify_permission_holders(
         session,
-        role_name=TALENTO_HUMANO_ROLE_NAME,
+        permission_code="recruitment.vacancies.publish",
         title="Nueva solicitud",
         body="Se creó una nueva solicitud de vacante.",
         related_entity_type="vacancy",
@@ -204,14 +218,15 @@ async def test_notify_role_zero_active_users(session: AsyncSession) -> None:
     assert count == 0, f"Expected 0 notifications for 0 active users, got {count}"
 
 
-async def test_notify_role_excludes_other_roles(session: AsyncSession) -> None:
-    """Users of Comercial/Proyecto must NOT receive TH notifications (spec R7.6)."""
+async def test_notify_permission_holders_excludes_other_roles(session: AsyncSession) -> None:
+    """Comercial/Proyecto (no recruitment.vacancies.publish) must NOT be notified (spec R7.6)."""
     from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
-        TALENTO_HUMANO_ROLE_NAME,
         bootstrap_admin,
     )
     from app.modules.auth.infrastructure.models import Role, User, UserRole  # noqa: PLC0415
-    from app.modules.comms.application.notifications_service import notify_role  # noqa: PLC0415
+    from app.modules.comms.application.notifications_service import (  # noqa: PLC0415
+        notify_permission_holders,
+    )
     from app.modules.comms.infrastructure.models import Notification  # noqa: PLC0415
     from app.modules.org.infrastructure.parameters_repository import (
         ParameterRepository,  # noqa: PLC0415
@@ -242,9 +257,9 @@ async def test_notify_role_excludes_other_roles(session: AsyncSession) -> None:
     # 1 active TH user
     active, _ = await _seed_th_users(session, active_count=1, inactive_count=0)
 
-    count = await notify_role(
+    count = await notify_permission_holders(
         session,
-        role_name=TALENTO_HUMANO_ROLE_NAME,
+        permission_code="recruitment.vacancies.publish",
         title="Nueva solicitud",
         body="body",
         related_entity_type="vacancy",
@@ -272,21 +287,20 @@ async def test_notify_role_excludes_other_roles(session: AsyncSession) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4.3 — notify_role dispatches emails when email_render is provided
+# 4.3 — notify_permission_holders dispatches emails when email_render is provided
 # ---------------------------------------------------------------------------
 
 
-async def test_notify_role_dispatches_emails(session: AsyncSession) -> None:
+async def test_notify_permission_holders_dispatches_emails(session: AsyncSession) -> None:
     """4 active TH users → 4 email dispatch calls when email_render is provided (spec R7.4)."""
     from unittest.mock import patch  # noqa: PLC0415
 
-    from app.modules.auth.application.bootstrap_service import (
-        TALENTO_HUMANO_ROLE_NAME,  # noqa: PLC0415
-    )
     from app.modules.comms.application.email_templates import (
         render_solicitud_created_email,  # noqa: PLC0415
     )
-    from app.modules.comms.application.notifications_service import notify_role  # noqa: PLC0415
+    from app.modules.comms.application.notifications_service import (  # noqa: PLC0415
+        notify_permission_holders,
+    )
 
     await _seed_th_users(session, active_count=4, inactive_count=0)
 
@@ -303,9 +317,9 @@ async def test_notify_role_dispatches_emails(session: AsyncSession) -> None:
         instance.send = AsyncMock(side_effect=_mock_send)
         MockDispatch.return_value = instance
 
-        count = await notify_role(
+        count = await notify_permission_holders(
             session,
-            role_name=TALENTO_HUMANO_ROLE_NAME,
+            permission_code="recruitment.vacancies.publish",
             title="Nueva solicitud",
             body="body",
             related_entity_type="vacancy",
@@ -322,17 +336,18 @@ async def test_notify_role_dispatches_emails(session: AsyncSession) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_notify_role_smtp_failure_on_one_user_swallowed(session: AsyncSession) -> None:
+async def test_notify_permission_holders_smtp_failure_on_one_user_swallowed(
+    session: AsyncSession,
+) -> None:
     """SMTP failure on user 2 must be swallowed; user 1 still notified (spec R7.7)."""
     from unittest.mock import patch  # noqa: PLC0415
 
-    from app.modules.auth.application.bootstrap_service import (
-        TALENTO_HUMANO_ROLE_NAME,  # noqa: PLC0415
-    )
     from app.modules.comms.application.email_templates import (
         render_solicitud_created_email,  # noqa: PLC0415
     )
-    from app.modules.comms.application.notifications_service import notify_role  # noqa: PLC0415
+    from app.modules.comms.application.notifications_service import (  # noqa: PLC0415
+        notify_permission_holders,
+    )
     from app.modules.comms.infrastructure.models import Notification  # noqa: PLC0415
 
     active, _ = await _seed_th_users(session, active_count=2, inactive_count=0)
@@ -354,9 +369,9 @@ async def test_notify_role_smtp_failure_on_one_user_swallowed(session: AsyncSess
         MockDispatch.return_value = instance
 
         # Must NOT raise
-        count = await notify_role(
+        count = await notify_permission_holders(
             session,
-            role_name=TALENTO_HUMANO_ROLE_NAME,
+            permission_code="recruitment.vacancies.publish",
             title="Nueva solicitud",
             body="body",
             related_entity_type="vacancy",
