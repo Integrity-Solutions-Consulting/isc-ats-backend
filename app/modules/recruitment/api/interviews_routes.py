@@ -3,7 +3,8 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from app.core.config import settings
 from app.core.database import async_session_factory
@@ -31,6 +32,7 @@ from app.modules.recruitment.api.interviews_schemas import (
     InterviewCreate,
     InterviewerRead,
     InterviewInviteCreate,
+    InterviewListRead,
     InterviewRead,
     InterviewUpdate,
     SlotConfirmRequest,
@@ -479,6 +481,104 @@ async def get_agenda(session: SessionDep) -> list[AgendaInterviewRead]:
             )
         )
     return result
+
+
+# ── Global "Entrevistas" list (all interviews, paginated) ─────────────────────
+
+
+@router.get(
+    "/all",
+    response_model=Page[InterviewListRead],
+    dependencies=[Depends(require_permission("recruitment.interviews.read_agenda"))],
+)
+async def list_all_interviews(
+    session: SessionDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+    vacancy_id: Annotated[int | None, Query()] = None,
+    status_id: Annotated[int | None, Query()] = None,
+    date_from: Annotated[datetime | None, Query()] = None,
+    date_to: Annotated[datetime | None, Query()] = None,
+) -> Page[InterviewListRead]:
+    """ALL scheduled interviews across every vacancy, paginated and filterable.
+
+    Backs the global "Entrevistas" page (Talento Humano / Admin only). Gated by
+    the same recruitment.interviews.read_agenda permission as /agenda —
+    Comercial/Proyecto also hold recruitment.interviews.read and must not see
+    this cross-owner surface.
+
+    Unlike /agenda, there is no hardcoded date window and cancelled interviews
+    are NOT excluded (this is a full history/list view, not a "what's coming
+    up" widget) — callers can still narrow by status_id/date_from/date_to.
+
+    Open Mode B offers (status=offered, scheduled_at still NULL because the
+    candidate hasn't picked a slot yet) are included too — they sort first
+    (NULLS FIRST) since they're the rows needing HR's attention.
+    """
+    params = PageParams(page=page, size=size)
+    status_param = aliased(Parameter)
+
+    base_stmt = (
+        select(
+            Interview,
+            Candidate.first_name,
+            Candidate.last_name,
+            Vacancy.id,
+            Parameter.name,
+            User.email,
+            status_param.code,
+        )
+        .join(Application, Application.id == Interview.application_id)
+        .join(Candidate, Candidate.id == Application.candidate_id)
+        .join(Vacancy, Vacancy.id == Application.vacancy_id)
+        .join(Parameter, Parameter.id == Vacancy.vacancy_name_id)
+        .join(User, User.id == Interview.interviewer_id)
+        .join(status_param, status_param.id == Interview.status_id)
+        .where(Interview.is_active.is_(True))
+    )
+    if vacancy_id is not None:
+        base_stmt = base_stmt.where(Vacancy.id == vacancy_id)
+    if status_id is not None:
+        base_stmt = base_stmt.where(Interview.status_id == status_id)
+    if date_from is not None:
+        base_stmt = base_stmt.where(Interview.scheduled_at >= date_from)
+    if date_to is not None:
+        base_stmt = base_stmt.where(Interview.scheduled_at < date_to)
+
+    count_stmt = select(func.count()).select_from(base_stmt.subquery())
+    total = (await session.execute(count_stmt)).scalar_one()
+
+    stmt = (
+        base_stmt.order_by(Interview.scheduled_at.desc().nullsfirst())
+        .offset(params.offset)
+        .limit(params.limit)
+    )
+    rows = (await session.execute(stmt)).all()
+
+    items: list[InterviewListRead] = []
+    for (
+        interview,
+        candidate_first,
+        candidate_last,
+        vac_id,
+        vacancy_name,
+        interviewer_email,
+        status_code,
+    ) in rows:
+        items.append(
+            InterviewListRead(
+                id=interview.id,
+                scheduled_at=interview.scheduled_at,
+                ends_at=interview.ends_at,
+                candidate_name=f"{candidate_first} {candidate_last}".strip(),
+                vacancy_name=vacancy_name,
+                vacancy_id=vac_id,
+                interviewer_email=interviewer_email,
+                teams_meeting_url=interview.teams_meeting_url,
+                status=status_code,
+            )
+        )
+    return Page.create(items, total, params)
 
 
 # ── Mode B — invite + in-account candidate endpoints ──────────────────────────

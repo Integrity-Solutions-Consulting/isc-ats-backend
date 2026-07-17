@@ -121,3 +121,29 @@ class AgendaInterviewRead(BaseModel):
     interviewer_email: str
     teams_meeting_url: str | None = None
     day: str = Field(description='"today" or "tomorrow" (Ecuador local calendar day)')
+
+
+# ── Global "Entrevistas" list (all interviews, paginated) ─────────────────────
+
+
+class InterviewListRead(BaseModel):
+    """A single interview row for the global, paginated "Entrevistas" list.
+
+    Returned by GET /interviews/all, gated by recruitment.interviews.read_agenda
+    (Admin + Talento Humano only, same as the agenda widget). Unlike the agenda,
+    this covers ALL interviews (any date, any status) so `status` carries the
+    interview_status Parameter code (e.g. "scheduled", "cancelled") rather than
+    bucketing by day.
+    """
+
+    id: int
+    scheduled_at: datetime | None = Field(
+        default=None, description="Null for an open Mode B offer awaiting the candidate's pick"
+    )
+    ends_at: datetime | None = None
+    candidate_name: str
+    vacancy_name: str
+    vacancy_id: int
+    interviewer_email: str
+    teams_meeting_url: str | None = None
+    status: str = Field(description="interview_status Parameter code, e.g. 'scheduled'")
