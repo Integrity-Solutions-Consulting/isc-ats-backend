@@ -378,17 +378,23 @@ async def get_available_slots(
         target_date=target_date,
     )
 
-    # Compute end for each slot start using the window it falls in
+    # Compute end for each slot start using the window it falls in.
+    target_weekday = target_date.weekday()
     result: list[SlotRead] = []
     for slot_start in starts:
-        # Find which window this slot belongs to (start_time <= slot <= end_time)
-        slot_time = slot_start.replace(tzinfo=None)
-        slot_t = slot_time.time()
-        dur = 60  # fallback
+        # `slot_start` is UTC; availability rows store Ecuador LOCAL start_time/
+        # end_time (R1). Convert back to local before comparing — matching raw
+        # UTC digits against local window bounds silently fell back to a
+        # hardcoded 60 min whenever the +5h shift pushed the slot outside the
+        # window's local numeric range, ignoring the interviewer's configured
+        # slot_duration_min. Also match `day_of_week` so a same-time-range
+        # window on a different day never donates the wrong duration.
+        slot_t = slot_start.astimezone(EC_TZ).time()
+        dur = 60  # fallback — should not trigger once every window matches by day+time
         for row in avail_rows:
-            r_start = row.start_time.replace(tzinfo=None) if hasattr(row.start_time, "tzinfo") and row.start_time.tzinfo is not None else row.start_time
-            r_end = row.end_time.replace(tzinfo=None) if hasattr(row.end_time, "tzinfo") and row.end_time.tzinfo is not None else row.end_time
-            if r_start <= slot_t < r_end:
+            if row.day_of_week != target_weekday:
+                continue
+            if row.start_time <= slot_t < row.end_time:
                 dur = row.slot_duration_min
                 break
         slot_end = slot_start + timedelta(minutes=dur)
