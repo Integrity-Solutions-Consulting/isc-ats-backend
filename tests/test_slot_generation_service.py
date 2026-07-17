@@ -256,3 +256,56 @@ def test_service_buffer_30_10() -> None:
 def test_service_ec_tz_is_fixed_utc_minus_5() -> None:
     """EC_TZ must be a fixed UTC-5 offset (Ecuador does not observe DST)."""
     assert EC_TZ == timezone(timedelta(hours=-5))
+
+
+def test_service_excludes_past_slots_when_target_date_is_today() -> None:
+    """R7: when target_date is 'today' (Ecuador calendar day) and a slot's start
+    has already passed relative to `now`, it must not be offered.
+
+    Window is 09:00-11:00 local -> 09:00, 10:00 local slots (14:00Z, 15:00Z).
+    `now` = 14:30 UTC = 09:30 Ecuador local -> the 09:00 slot already started,
+    the 10:00 slot is still upcoming.
+    """
+    svc = SlotGenerationService()
+    windows = [_make_window()]
+    now = datetime(2026, 6, 15, 14, 30, tzinfo=UTC)
+    slots = svc.get_available_slots(
+        target_date=_TARGET_DATE,
+        windows=windows,
+        booked_interviews=[],
+        now=now,
+    )
+    assert slots == [datetime(2026, 6, 15, 15, 0, tzinfo=UTC)]
+
+
+def test_service_does_not_filter_by_now_for_a_future_target_date() -> None:
+    """When `now` falls on a different Ecuador calendar day than target_date
+    (i.e. target_date is a future day), no past-time filtering applies — every
+    slot for that future day is legitimately still bookable."""
+    svc = SlotGenerationService()
+    windows = [_make_window()]
+    # 'now' is the day before target_date, late in the evening local time.
+    now = datetime(2026, 6, 15, 3, 0, tzinfo=UTC)  # 2026-06-14 22:00 Ecuador local
+    slots = svc.get_available_slots(
+        target_date=_TARGET_DATE,
+        windows=windows,
+        booked_interviews=[],
+        now=now,
+    )
+    assert len(slots) == 2
+
+
+def test_service_now_none_applies_no_past_filtering() -> None:
+    """`now=None` (default) preserves prior behavior — no past-time filtering.
+
+    Keeps the pure service deterministic/hermetic: the real wall-clock read
+    lives in AvailableSlotsService, not here.
+    """
+    svc = SlotGenerationService()
+    windows = [_make_window()]
+    slots = svc.get_available_slots(
+        target_date=_TARGET_DATE,
+        windows=windows,
+        booked_interviews=[],
+    )
+    assert len(slots) == 2

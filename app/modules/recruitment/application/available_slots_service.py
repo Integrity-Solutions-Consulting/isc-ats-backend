@@ -39,11 +39,15 @@ class AvailableSlotsService:
         *,
         interviewer_id: int,
         target_date: date,
+        now: datetime | None = None,
     ) -> list[datetime]:
         """Return free UTC datetimes for `interviewer_id` on `target_date`.
 
         Only active availability rows are considered.
         Only active, non-cancelled interviews block slots.
+        When `target_date` is today (Ecuador local), slots whose start has
+        already passed relative to `now` (defaults to the real wall clock)
+        are excluded — R7.
         """
         session: AsyncSession = self.availability_repo.session
 
@@ -109,6 +113,7 @@ class AvailableSlotsService:
             target_date=target_date,
             windows=windows,
             booked_interviews=booked_intervals,
+            now=now if now is not None else datetime.now(UTC),
         )
 
     async def get_interviewers(self) -> list[User]:

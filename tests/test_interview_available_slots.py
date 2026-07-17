@@ -94,6 +94,26 @@ async def test_available_slots_basic(session: AsyncSession) -> None:
     assert times == [(14, 0), (15, 0)]
 
 
+async def test_available_slots_excludes_past_slots_for_today(session: AsyncSession) -> None:
+    """R7: when `now` falls on the same Ecuador calendar day as target_date,
+    slots whose start has already passed must not be offered.
+
+    09:00-11:00 local -> 09:00, 10:00 local slots (14:00Z, 15:00Z). `now` =
+    14:30 UTC = 09:30 Ecuador local -> only the 10:00 slot remains.
+    """
+    user = await _make_user(session)
+    await _make_availability(session, user.id, day_of_week=0, start=time(9, 0), end=time(11, 0))
+
+    svc = _make_svc(session)
+    slots = await svc.get_slots(
+        interviewer_id=user.id,
+        target_date=_MONDAY,
+        now=datetime(2026, 6, 15, 14, 30, tzinfo=UTC),
+    )
+    times = [(s.hour, s.minute) for s in slots]
+    assert times == [(15, 0)]
+
+
 async def test_available_slots_inactive_excluded(session: AsyncSession) -> None:
     """Inactive availability rows produce no slots."""
     user = await _make_user(session)

@@ -101,6 +101,7 @@ class SlotGenerationService:
         target_date: date,
         windows: list[AvailabilityWindow],
         booked_interviews: list[tuple[datetime, datetime]],
+        now: datetime | None = None,
     ) -> list[datetime]:
         """Return sorted UTC datetimes for every free slot on `target_date`.
 
@@ -111,6 +112,11 @@ class SlotGenerationService:
                 non-cancelled interviews on the same date. Soft-deleted and cancelled
                 interviews must NOT appear in this list — the caller is responsible
                 for filtering them.
+            now: Current instant (UTC). When provided AND `target_date` is
+                `now`'s Ecuador calendar day, slots whose start has already
+                passed are excluded (R7 — HR can't offer a time that's gone).
+                Left `None` (default) to keep this service pure/deterministic;
+                the real wall-clock read belongs to the caller.
 
         Returns:
             Sorted list of UTC datetime objects for free slot starts.
@@ -169,4 +175,8 @@ class SlotGenerationService:
                 result.append(slot_dt)
 
         result.sort()
+
+        if now is not None and now.astimezone(EC_TZ).date() == target_date:
+            result = [s for s in result if s > now]
+
         return result
