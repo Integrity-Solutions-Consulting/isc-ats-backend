@@ -229,28 +229,32 @@ class InterviewService:
         return list((await session.execute(stmt)).scalars().all())
 
     async def list_scheduled_for_candidate(self, user_id: int) -> list[Interview]:
-        """Scheduled (confirmed) interviews owned by user_id.
+        """Scheduled interviews owned by user_id, with scheduled_at set.
 
-        status=scheduled with scheduled_at set — the candidate-facing counterpart
-        of list_offers_for_candidate, used to show the confirmed interview after a
-        page reload (the offer is gone once confirmed).
+        Any status with a real scheduled_at counts here — Mode A (status=scheduled,
+        HR picked the time directly) and Mode B (status=confirmed, candidate picked
+        from HR's offered slots) must both surface, since scheduled_at only ever
+        gets set once a time is actually locked in. cancelled is explicitly
+        excluded (mirrors get_agenda in interviews_routes.py) so a cancelled
+        interview never reappears as "my interview" just because scheduled_at was
+        left set on the row.
         """
         session = self.repository.session
-        scheduled = await ParameterRepository(session).get_by_type_and_code(
-            "interview_status", "scheduled"
-        )
-        if scheduled is None:
-            return []
+        param_repo = ParameterRepository(session)
+        cancelled = await param_repo.get_by_type_and_code("interview_status", "cancelled")
+        cancelled_id: int | None = cancelled.id if cancelled is not None else None
+
         stmt = (
             select(Interview)
             .join(Application, Application.id == Interview.application_id)
             .join(Candidate, Candidate.id == Application.candidate_id)
             .where(Candidate.user_id == user_id)
-            .where(Interview.status_id == scheduled.id)
             .where(Interview.scheduled_at.is_not(None))
             .where(Interview.is_active.is_(True))
             .order_by(Interview.scheduled_at)
         )
+        if cancelled_id is not None:
+            stmt = stmt.where(Interview.status_id != cancelled_id)
         return list((await session.execute(stmt)).scalars().all())
 
     async def get_offer_for_candidate(
@@ -300,7 +304,7 @@ class InterviewService:
 
         Ownership and offer state are enforced by get_offer_for_candidate. Then
         the chosen slot must be one of offered_slots and must not double-book the
-        interviewer. On success: sets scheduled_at/ends_at, status=scheduled,
+        interviewer. On success: sets scheduled_at/ends_at, status=confirmed,
         scheduler=candidate.
         """
         interview = await self.get_offer_for_candidate(interview_id, user_id)
@@ -355,10 +359,10 @@ class InterviewService:
 
         session = self.repository.session
         param_repo = ParameterRepository(session)
-        scheduled_param = await param_repo.get_by_type_and_code("interview_status", "scheduled")
-        if scheduled_param is None:
+        confirmed_param = await param_repo.get_by_type_and_code("interview_status", "confirmed")
+        if confirmed_param is None:
             raise InterviewReferenceError(
-                "Parameter (interview_status, scheduled) not found — run seed migration"
+                "Parameter (interview_status, confirmed) not found — run seed migration"
             )
         candidate_param = await param_repo.get_by_type_and_code(
             "interview_scheduler", "candidate"
@@ -373,7 +377,7 @@ class InterviewService:
             {
                 "scheduled_at": start,
                 "ends_at": end,
-                "status_id": scheduled_param.id,
+                "status_id": confirmed_param.id,
                 "scheduled_by_id": candidate_param.id,
             },
         )

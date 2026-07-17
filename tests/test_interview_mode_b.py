@@ -272,9 +272,9 @@ async def test_confirm_sets_status_scheduled_by_candidate(session: AsyncSession)
         invite.id, cand_user.id, invite.offered_slots[0]
     )
     repo = ParameterRepository(session)
-    scheduled = await repo.get_by_type_and_code("interview_status", "scheduled")
+    confirmed_param = await repo.get_by_type_and_code("interview_status", "confirmed")
     candidate_sched = await repo.get_by_type_and_code("interview_scheduler", "candidate")
-    assert confirmed.status_id == scheduled.id
+    assert confirmed.status_id == confirmed_param.id
     assert confirmed.scheduled_by_id == candidate_sched.id
 
 
@@ -590,6 +590,36 @@ async def test_list_scheduled_excludes_other_candidates(session: AsyncSession) -
     )
     scheduled = await _svc(session).list_scheduled_for_candidate(999999)
     assert scheduled == []
+
+
+async def test_list_scheduled_includes_mode_a_direct_scheduling(
+    session: AsyncSession,
+) -> None:
+    """Mode A: HR picks the slot directly (status=scheduled, never goes through
+    the offer/confirm flow). This must ALSO surface here — if the fix to stop
+    hardcoding status=scheduled ever regressed to filtering only on
+    status=confirmed, this is the interview that would silently disappear from
+    the candidate's "my interview" view.
+    """
+    app_, stage, interviewer, cand_user, _param = await _make_graph(session)
+    repo = ParameterRepository(session)
+    scheduled_param = await repo.get_by_type_and_code("interview_status", "scheduled")
+    hr_sched = await repo.get_by_type_and_code("interview_scheduler", "hr")
+    start = _now() + timedelta(days=3)
+    interview = await BaseRepository(session, Interview).add(
+        Interview(
+            application_id=app_.id,
+            process_stage_id=stage.id,
+            interviewer_id=interviewer.id,
+            scheduled_at=start,
+            ends_at=start + timedelta(hours=1),
+            status_id=scheduled_param.id,
+            scheduled_by_id=hr_sched.id,
+            created_by=1,
+        )
+    )
+    scheduled = await _svc(session).list_scheduled_for_candidate(cand_user.id)
+    assert any(i.id == interview.id for i in scheduled)
 
 
 # ── HTTP (ownership) ──────────────────────────────────────────────────────────
