@@ -244,6 +244,10 @@ def test_talento_humano_permission_codes_exact_set() -> None:
             "recruitment.interviews.update",
             "recruitment.interviews.delete",
             "recruitment.interviews.read_agenda",
+            "recruitment.interviewer_availability.read",
+            "recruitment.interviewer_availability.create",
+            "recruitment.interviewer_availability.update",
+            "recruitment.interviewer_availability.delete",
             # org — processes; parameters read+create+update; read-only on
             # departments/client_companies/contacts
             "org.departments.read",
@@ -463,11 +467,18 @@ def test_comercial_permission_codes_exact_set() -> None:
             "recruitment.application_notes.read",
             "recruitment.application_documents.read",
             "recruitment.interviews.read",
-            # org — departments/clients read-only; contacts read; profile
-            # templates/items full CRUD; parameters read+create+update
+            # org — departments full CRUD (local entity); clients read-only
+            # (mirrored from TMR); contacts full CRUD; profile templates/items
+            # full CRUD; parameters full CRUD
             "org.departments.read",
+            "org.departments.create",
+            "org.departments.update",
+            "org.departments.delete",
             "org.client_companies.read",
             "org.contacts.read",
+            "org.contacts.create",
+            "org.contacts.update",
+            "org.contacts.delete",
             "org.profile_templates.read",
             "org.profile_templates.create",
             "org.profile_templates.update",
@@ -479,6 +490,7 @@ def test_comercial_permission_codes_exact_set() -> None:
             "org.parameters.read",
             "org.parameters.create",
             "org.parameters.update",
+            "org.parameters.delete",
             # talent — full CRUD
             "talent.talent_pool.read",
             "talent.talent_pool.create",
@@ -508,6 +520,17 @@ def test_comercial_no_vacancy_publish_update_delete() -> None:
     }
     violations = forbidden & COMERCIAL_PERMISSION_CODES
     assert not violations, f"Comercial must not hold: {violations}"
+
+
+def test_comercial_no_interviewer_availability() -> None:
+    """Comercial/Proyecto never conduct interviews — no interviewer_availability.*
+    (TH-only; also drives the "Mi Perfil" card visibility on the frontend)."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        COMERCIAL_PERMISSION_CODES,
+    )
+
+    forbidden = {c for c in COMERCIAL_PERMISSION_CODES if c.startswith("recruitment.interviewer_availability.")}
+    assert not forbidden, f"Comercial must not hold interviewer_availability permissions: {forbidden}"
 
 
 def test_comercial_no_processes_or_process_stages() -> None:

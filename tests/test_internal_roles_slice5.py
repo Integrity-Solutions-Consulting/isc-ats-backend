@@ -305,8 +305,9 @@ async def test_create_parameter_route_unrestricted_for_caller_with_roles_create(
 async def test_update_parameter_route_forbids_restricted_caller_off_allowlist(
     session: AsyncSession,
 ) -> None:
-    """Proyecto (allowlist: vacancy_name) updating a 'career' parameter → 403
-    (career is outside Proyecto's allowlist)."""
+    """Proyecto (allowlist: vacancy_name, city, career, work_mode, resource_level)
+    updating a 'title' parameter → 403 (title is outside Proyecto's allowlist —
+    it's not one of the vacancy-creation-form catalogs)."""
     from app.core.database import get_session  # noqa: PLC0415
     from app.core.security import create_access_token  # noqa: PLC0415
     from app.main import app  # noqa: PLC0415
@@ -314,7 +315,7 @@ async def test_update_parameter_route_forbids_restricted_caller_off_allowlist(
     tag = uuid.uuid4().hex[:8]
     user, _admin = await _staff_user_with_role(session, "Proyecto", tag=tag)
     param = await BaseRepository(session, Parameter).add(
-        Parameter(type="career", code=f"car-{tag}", name="Backend")
+        Parameter(type="title", code=f"tt-{tag}", name="Backend")
     )
 
     async def _use_test_session() -> AsyncGenerator[AsyncSession, None]:
@@ -364,5 +365,99 @@ async def test_update_parameter_route_allows_restricted_caller_vacancy_name(
                 headers={"Authorization": f"Bearer {token}"},
             )
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_create_parameter_route_allows_comercial_on_vacancy_form_catalog(
+    session: AsyncSession,
+) -> None:
+    """Comercial creating type='city' → 201 (city is one of the vacancy-creation-
+    form catalogs Comercial/Proyecto self-manage, alongside vacancy_name)."""
+    from app.core.database import get_session  # noqa: PLC0415
+    from app.core.security import create_access_token  # noqa: PLC0415
+    from app.main import app  # noqa: PLC0415
+
+    tag = uuid.uuid4().hex[:8]
+    user, _admin = await _staff_user_with_role(session, "Comercial", tag=tag)
+
+    async def _use_test_session() -> AsyncGenerator[AsyncSession, None]:
+        yield session
+
+    app.dependency_overrides[get_session] = _use_test_session
+    try:
+        token = create_access_token(user.id, extra_claims={"portal": "staff"})
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(
+                "/api/v1/org/parameters",
+                json={"type": "city", "code": f"ct-{tag}", "name": "Quito"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert r.status_code == 201, f"Expected 201, got {r.status_code}: {r.text}"
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_delete_parameter_route_allows_comercial_on_allowlisted_type(
+    session: AsyncSession,
+) -> None:
+    """Comercial deleting a 'vacancy_name' parameter → 204 (org.parameters.delete
+    was missing from COMERCIAL_PERMISSION_CODES; full CRUD requires it too)."""
+    from app.core.database import get_session  # noqa: PLC0415
+    from app.core.security import create_access_token  # noqa: PLC0415
+    from app.main import app  # noqa: PLC0415
+
+    tag = uuid.uuid4().hex[:8]
+    user, _admin = await _staff_user_with_role(session, "Comercial", tag=tag)
+    param = await BaseRepository(session, Parameter).add(
+        Parameter(type="vacancy_name", code=f"vn-{tag}", name="Dev")
+    )
+
+    async def _use_test_session() -> AsyncGenerator[AsyncSession, None]:
+        yield session
+
+    app.dependency_overrides[get_session] = _use_test_session
+    try:
+        token = create_access_token(user.id, extra_claims={"portal": "staff"})
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.delete(
+                f"/api/v1/org/parameters/{param.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert r.status_code == 204, f"Expected 204, got {r.status_code}: {r.text}"
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def test_delete_parameter_route_forbids_comercial_off_allowlist(
+    session: AsyncSession,
+) -> None:
+    """Comercial deleting a 'title' parameter → 403 (title is outside their
+    allowlist even though they now hold org.parameters.delete)."""
+    from app.core.database import get_session  # noqa: PLC0415
+    from app.core.security import create_access_token  # noqa: PLC0415
+    from app.main import app  # noqa: PLC0415
+
+    tag = uuid.uuid4().hex[:8]
+    user, _admin = await _staff_user_with_role(session, "Comercial", tag=tag)
+    param = await BaseRepository(session, Parameter).add(
+        Parameter(type="title", code=f"tt-{tag}", name="Dev")
+    )
+
+    async def _use_test_session() -> AsyncGenerator[AsyncSession, None]:
+        yield session
+
+    app.dependency_overrides[get_session] = _use_test_session
+    try:
+        token = create_access_token(user.id, extra_claims={"portal": "staff"})
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.delete(
+                f"/api/v1/org/parameters/{param.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert r.status_code == 403, f"Expected 403, got {r.status_code}: {r.text}"
     finally:
         app.dependency_overrides.clear()

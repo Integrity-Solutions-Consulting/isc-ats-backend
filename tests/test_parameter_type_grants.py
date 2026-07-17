@@ -9,12 +9,13 @@ Tests cover:
   3. Talento Humano can create stage/stage_status parameters but still 403s on
      an out-of-allowlist type (department)
   4. Comercial/Proyecto still 403 on stage/stage_status (their allowlist is
-     vacancy_name only)
+     vacancy_name, city, career, work_mode, resource_level — the catalogs the
+     vacancy-creation form actually reads from)
 
 All async tests use a rolled-back session (unit-level) or the full ASGI app
 (route-level). See test_internal_roles_slice5.py for the original R8 tests
 (updated for the per-role model: TH no longer includes vacancy_name — that's
-Comercial/Proyecto's catalog, not TH's — all three still exclude "career").
+Comercial/Proyecto's catalog, not TH's — all three still exclude "title").
 """
 
 from __future__ import annotations
@@ -168,12 +169,12 @@ async def test_list_parameter_types_for_user_reflects_role_grants(
     assert types == {"stage", "stage_status"}
 
 
-async def test_list_parameter_types_for_user_comercial_is_vacancy_name_only(
+async def test_list_parameter_types_for_user_comercial_is_vacancy_form_catalogs(
     session: AsyncSession,
 ) -> None:
     user, _admin = await _staff_user_with_role(session, "Comercial", tag=uuid.uuid4().hex[:8])
     types = await AuthorizationRepository(session).list_parameter_types_for_user(user.id)
-    assert types == {"vacancy_name"}
+    assert types == {"vacancy_name", "city", "career", "work_mode", "resource_level"}
 
 
 # ---------------------------------------------------------------------------

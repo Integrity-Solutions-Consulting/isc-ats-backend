@@ -93,6 +93,13 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
         # Dedicated read for the "today/tomorrow" agenda widget — Admin + TH only
         # (Comercial/Proyecto intentionally excluded; see permissions_catalog.py).
         "recruitment.interviews.read_agenda",
+        # Self-service "Mi Perfil" availability editor is unrestricted in the UI
+        # (any staff user may configure their own interview slots/duration) —
+        # full CRUD needed to create/edit/delete their own availability windows.
+        "recruitment.interviewer_availability.read",
+        "recruitment.interviewer_availability.create",
+        "recruitment.interviewer_availability.update",
+        "recruitment.interviewer_availability.delete",
         # org — process/stage configuration; read-only on departments/clients/contacts
         "org.departments.read",
         "org.client_companies.read",
@@ -131,12 +138,15 @@ TALENTO_HUMANO_PERMISSION_CODES: frozenset[str] = frozenset(
 # read-only pipeline access (applications/notes/interviews/documents), full CRUD on
 # the talent pool (they review CVs from other vacancies' applicants to reach out for
 # openings the candidate never applied to), and full CRUD on profile templates and
-# items (they own candidate profile authoring). Read-only on org.departments and
-# org.client_companies — needed to populate the vacancy-creation form's cliente/
-# departamento fields and the vacancies list filters; they don't manage those
-# catalogs. No org.processes/process_stages (TH owns those). ai.vacancy_promo_images
-# is READ-ONLY here — Comercial/Proyecto may view generated posters but only TH may
-# generate (create) or remove (delete) them.
+# items (they own candidate profile authoring). Full CRUD on org.departments — this
+# system is the source of truth for departments (unlike client companies, see next).
+# Read-only on org.client_companies: clients are mirrored from the external TMR
+# system (external_id, not managed locally) — see architecture decision on the
+# ATS client catalog being fed from TMR. Full CRUD on org.contacts — Comercial/
+# Proyecto own the client-contact directory (create/edit/deactivate contacts as
+# their client relationships change). No org.processes/process_stages (TH owns
+# those). ai.vacancy_promo_images is READ-ONLY here — Comercial/Proyecto may view
+# generated posters but only TH may generate (create) or remove (delete) them.
 COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
     {
         # recruitment — vacancy read+create only; full pipeline read; no write on pipeline
@@ -147,11 +157,21 @@ COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
         "recruitment.application_notes.read",
         "recruitment.application_documents.read",
         "recruitment.interviews.read",
-        # org — departments/clients read-only; contacts read; full CRUD on profile
-        # templates/items; parameters read+create+update
+        # No recruitment.interviewer_availability.* — Comercial/Proyecto never
+        # conduct interviews, so "Mi Perfil" hides that card for them entirely
+        # (see the "Mi Perfil" availability gating in the frontend).
+        # org — departments full CRUD (local entity); clients read-only (mirrored
+        # from TMR); contacts full CRUD; profile templates/items full CRUD;
+        # parameters full CRUD
         "org.departments.read",
+        "org.departments.create",
+        "org.departments.update",
+        "org.departments.delete",
         "org.client_companies.read",
         "org.contacts.read",
+        "org.contacts.create",
+        "org.contacts.update",
+        "org.contacts.delete",
         "org.profile_templates.read",
         "org.profile_templates.create",
         "org.profile_templates.update",
@@ -163,6 +183,7 @@ COMERCIAL_PERMISSION_CODES: frozenset[str] = frozenset(
         "org.parameters.read",
         "org.parameters.create",
         "org.parameters.update",
+        "org.parameters.delete",
         # talent — full CRUD
         "talent.talent_pool.read",
         "talent.talent_pool.create",
@@ -185,9 +206,16 @@ PROYECTO_PERMISSION_CODES: frozenset[str] = COMERCIAL_PERMISSION_CODES
 # Replaces the previous hardcoded, global "non-admins may only write vacancy_name"
 # rule — see auth.role_parameter_type_grants and ParameterTypeForbiddenError.
 # Talento Humano owns EXACTLY stage/stage_status (the 2 catalogs it operates day to
-# day) — vacancy_name ("Plantillas de nombre") is owned by Comercial/Proyecto, not TH.
+# day). Comercial/Proyecto own every catalog the vacancy-creation form actually
+# reads from (BasicInfoSection/LocationSection/SelectionSection): vacancy_name
+# (cargo), city, career, work_mode, resource_level — so they can add a missing
+# option themselves instead of routing through Admin. title/education_level are
+# NOT vacancy-form catalogs (unused there) and department/client_companies stay
+# read-only — those are structural/mirrored entities, not ad-hoc picklists.
 TALENTO_HUMANO_PARAMETER_TYPES: frozenset[str] = frozenset({"stage", "stage_status"})
-COMERCIAL_PARAMETER_TYPES: frozenset[str] = frozenset({"vacancy_name"})
+COMERCIAL_PARAMETER_TYPES: frozenset[str] = frozenset(
+    {"vacancy_name", "city", "career", "work_mode", "resource_level"}
+)
 
 # Proyecto mirrors Comercial exactly, same rationale as PROYECTO_PERMISSION_CODES.
 PROYECTO_PARAMETER_TYPES: frozenset[str] = COMERCIAL_PARAMETER_TYPES
