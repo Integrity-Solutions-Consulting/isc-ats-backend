@@ -29,9 +29,17 @@ class ClientCompanyService:
         self.in_use_checker = in_use_checker
 
     async def list(
-        self, params: PageParams, *, include_inactive: bool = False
+        self,
+        params: PageParams,
+        *,
+        include_inactive: bool = False,
+        external_only: bool = False,
     ) -> tuple[list[ClientCompany], int]:
-        return await self.repository.list(params, include_inactive=include_inactive)
+        return await self.repository.list(
+            params,
+            include_inactive=include_inactive,
+            external_only=external_only,
+        )
 
     async def get(self, company_id: int) -> ClientCompany:
         company = await self.repository.get(company_id)

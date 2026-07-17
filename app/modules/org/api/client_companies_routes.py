@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.core.config import settings
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.modules.auth.api.authorization import require_permission
 from app.modules.org.api.client_companies_schemas import (
@@ -14,6 +15,7 @@ from app.modules.org.application.client_companies_service import (
     ClientCompanyNotFoundError,
     ClientCompanyService,
 )
+from app.modules.org.application.client_sync_service import get_client_sync_service
 from app.modules.org.infrastructure.models import ClientCompany
 from app.modules.org.infrastructure.org_usage_repository import OrgUsageRepository
 from app.modules.recruitment.infrastructure.vacancy_usage_repository import (
@@ -49,12 +51,21 @@ ServiceDep = Annotated[ClientCompanyService, Depends(get_service)]
 )
 async def list_client_companies(
     service: ServiceDep,
+    session: SessionDep,
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 20,
     include_inactive: Annotated[bool, Query()] = False,
 ) -> Page[ClientCompanyRead]:
+    # Sync-on-read: refresh the TMR mirror before listing (throttled + fail-safe).
+    # The request's session commits on success (get_session), so upserts persist.
+    # When TMR is enabled the dropdown shows only TMR-sourced rows (external_id set);
+    # when disabled, behaviour is unchanged (all rows) so local dev isn't broken.
+    if settings.tmr_enabled:
+        await get_client_sync_service().sync(session)
     params = PageParams(page=page, size=size)
-    items, total = await service.list(params, include_inactive=include_inactive)
+    items, total = await service.list(
+        params, include_inactive=include_inactive, external_only=settings.tmr_enabled
+    )
     return Page.create([ClientCompanyRead.model_validate(i) for i in items], total, params)
 
 

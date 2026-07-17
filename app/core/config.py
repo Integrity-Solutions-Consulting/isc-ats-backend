@@ -110,6 +110,15 @@ class Settings(BaseSettings):
     azure_client_id: str = ""
     azure_client_secret: str = ""
 
+    # TMR (external .NET system) client/company mirror. Clients are synced on-read
+    # from TMR's REST API into org.client_companies. All three values are required
+    # for the feature to switch on — blank by default so local dev and tests run
+    # without TMR credentials (the sync becomes a no-op). Credentials must live in
+    # env vars (Dokploy), never in code.
+    tmr_base_url: str = ""
+    tmr_user: str = ""
+    tmr_password: str = ""
+
     # CORS — NoDecode so a comma-separated env string isn't JSON-parsed by the source
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:3000"]
@@ -180,6 +189,16 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"
+
+    @property
+    def tmr_enabled(self) -> bool:
+        """True only when every TMR setting is configured — fully off otherwise.
+
+        The client-sync feature stays disabled unless base URL, user, and password
+        are all present, so a dev/test environment without TMR creds never tries to
+        reach the external system.
+        """
+        return bool(self.tmr_base_url and self.tmr_user and self.tmr_password)
 
 
 @lru_cache

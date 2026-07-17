@@ -45,6 +45,11 @@ class ClientCompany(Base, AuditMixin, SoftDeleteMixin):
     id: Mapped[int] = mapped_column(Identity(), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), index=True)
     legal_name: Mapped[str | None] = mapped_column(String(300), default=None)
+    # TMR (external .NET system) client id this row was mirrored from. NULL for
+    # purely local rows. The partial unique constraint (WHERE external_id IS NOT
+    # NULL) lives in the migration, not here, to keep the multiple-NULLs semantics
+    # explicit — do not add unique=True to this column.
+    external_id: Mapped[int | None] = mapped_column(default=None, index=True)
 
 
 class Contact(Base, AuditMixin, SoftDeleteMixin):

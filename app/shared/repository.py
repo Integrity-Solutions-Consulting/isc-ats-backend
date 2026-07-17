@@ -32,10 +32,18 @@ class BaseRepository[ModelT: Base]:
         *,
         filters: dict[str, Any] | None = None,
         include_inactive: bool = False,
+        external_only: bool = False,
     ) -> tuple[list[ModelT], int]:
         stmt = select(self.model)
         if not include_inactive:
             stmt = stmt.where(self.model.is_active.is_(True))
+        if external_only:
+            if not hasattr(self.model, "external_id"):
+                raise ValueError(
+                    f"Model '{self.model.__name__}' has no 'external_id' column "
+                    "to filter on"
+                )
+            stmt = stmt.where(self.model.external_id.is_not(None))
         for field, value in (filters or {}).items():
             if not hasattr(self.model, field):
                 raise ValueError(f"Invalid filter field '{field}' for model '{self.model.__name__}'")
