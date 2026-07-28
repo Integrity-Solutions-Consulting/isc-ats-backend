@@ -6,6 +6,7 @@ other transitions (paused/active/draft) are unrestricted.
 import uuid
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import CurrentUser
@@ -27,9 +28,11 @@ from app.modules.recruitment.api.applications_schemas import (
 from app.modules.recruitment.api.vacancies_schemas import VacancyUpdate
 from app.modules.recruitment.application.applications_service import ApplicationService
 from app.modules.recruitment.application.vacancies_service import (
+    AUTO_REJECT_REASON,
     VacancyCloseError,
     VacancyService,
 )
+from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.applications_repository import (
     ApplicationRepository,
 )
@@ -39,6 +42,16 @@ from app.modules.recruitment.infrastructure.pipeline_repository import PipelineR
 from app.shared.repository import BaseRepository
 
 ACTOR = CurrentUser(user_id=1, ip="127.0.0.1")
+
+
+def _application_service(session: AsyncSession) -> ApplicationService:
+    return ApplicationService(
+        ApplicationRepository(session),
+        BaseRepository(session, Vacancy),
+        BaseRepository(session, Candidate),
+        BaseRepository(session, ProcessStage),
+        ParameterRepository(session),
+    )
 
 
 def _service(session: AsyncSession) -> VacancyService:
@@ -51,6 +64,7 @@ def _service(session: AsyncSession) -> VacancyService:
         BaseRepository(session, Process),
         BaseRepository(session, ProfileTemplate),
         PipelineRepository(session),
+        application_rejector=_application_service(session).auto_reject_for_vacancy,
     )
 
 
@@ -136,6 +150,71 @@ async def test_close_allowed_when_openings_filled(session: AsyncSession) -> None
         vacancy.id, VacancyUpdate(status_id=closed.id), ACTOR
     )
     assert updated.status_id == closed.id
+
+
+async def _add_pending_application(session: AsyncSession, vacancy: Vacancy) -> Application:
+    """Add a second candidate to `vacancy`, left active in a non-final stage —
+    the "still in progress when the vacancy closes" case."""
+    portal = await ParameterRepository(session).get_by_type_and_code("user_portal", "staff")
+    assert portal is not None
+    active = await ParameterRepository(session).get_by_type_and_code(
+        "application_status", "active"
+    )
+    assert active is not None
+    stage_name = await BaseRepository(session, Parameter).add(
+        Parameter(type="stage", code=uuid.uuid4().hex[:8], name="Entrevista")
+    )
+    stage = await BaseRepository(session, ProcessStage).add(
+        ProcessStage(process_id=vacancy.process_id, stage_id=stage_name.id, order=2)
+    )
+    user = await BaseRepository(session, User).add(
+        User(email=f"{uuid.uuid4().hex[:12]}@test.local", portal_id=portal.id)
+    )
+    candidate = await BaseRepository(session, Candidate).add(
+        Candidate(user_id=user.id, first_name="Pend", last_name="Ing")
+    )
+    return await BaseRepository(session, Application).add(
+        Application(
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=active.id,
+            current_stage_id=stage.id,
+        )
+    )
+
+
+async def test_close_auto_rejects_pending_applications(session: AsyncSession) -> None:
+    # openings=1/hired=1 satisfies _guard_close; a second, still-in-progress
+    # candidate must be auto-rejected once the vacancy actually closes.
+    vacancy = await _setup_vacancy(session, openings=1, hired=1)
+    pending = await _add_pending_application(session, vacancy)
+    closed = await _status(session, "closed")
+
+    await _service(session).update(vacancy.id, VacancyUpdate(status_id=closed.id), ACTOR)
+
+    rejected = await ParameterRepository(session).get_by_type_and_code(
+        "application_status", "rejected"
+    )
+    assert rejected is not None
+    refreshed = await session.get(Application, pending.id)
+    assert refreshed is not None
+    assert refreshed.status_id == rejected.id
+    assert refreshed.current_stage_id is None
+    assert refreshed.rejection_reason == AUTO_REJECT_REASON
+
+    # The hired candidate is a completed outcome — untouched by the closure.
+    hired_param = await ParameterRepository(session).get_by_type_and_code(
+        "application_status", "hired"
+    )
+    assert hired_param is not None
+    hired_apps = (
+        await session.execute(
+            select(Application)
+            .where(Application.vacancy_id == vacancy.id)
+            .where(Application.status_id == hired_param.id)
+        )
+    ).scalars().all()
+    assert len(hired_apps) == 1
 
 
 async def test_cancel_allowed_when_not_filled(session: AsyncSession) -> None:

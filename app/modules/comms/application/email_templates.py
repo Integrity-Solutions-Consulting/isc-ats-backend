@@ -1,6 +1,7 @@
 # ruff: noqa: E501 - inline HTML email markup intentionally exceeds the line length
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
+from html import escape as _html_escape
 
 # Interview times are stored in UTC; show them in Ecuador local time to candidates.
 # Ecuador is a fixed UTC-5 (no daylight saving), so a fixed offset is correct and
@@ -522,24 +523,36 @@ def render_interview_slot_offer_email(
     return RenderedEmail(subject=subject, html_body=html_body, text_body=text_body)
 
 
-def render_rejection_email(candidate_first_name: str, vacancy_name: str) -> RenderedEmail:
+def render_rejection_email(
+    candidate_first_name: str, vacancy_name: str, reason: str
+) -> RenderedEmail:
     """Rejection notification for a candidate (Spanish, Ecuador).
 
     Professional, empathetic wording explaining the candidate does not meet the
     profile requirements for this specific vacancy, encouraging them to apply to
     future openings.  Does NOT say "the process has concluded" because the
     vacancy may still be published and that phrasing would feel dishonest.
+
+    `reason` is the concrete explanation shown to the candidate — either the
+    free text an HR agent wrote when rejecting them in the Kanban, or the fixed
+    system copy used when the vacancy itself was closed/deleted (see
+    VacancyService.AUTO_REJECT_REASON). It is presented as its own paragraph
+    rather than woven into a sentence so it reads correctly whether it's a full
+    sentence or a short HR-written fragment.
     """
     subject = f"Actualización de tu postulación — {vacancy_name}"
     greeting = f"Hola {candidate_first_name}," if candidate_first_name else "Hola,"
+    # `reason` is free text an HR agent typed (or the fixed auto-reject system
+    # copy) — escape before splicing into HTML so stray "<"/"&" can't break the
+    # layout and pasted markup can't render as live HTML/links in the email.
+    safe_reason = _html_escape(reason)
 
     text_body = (
         f"{greeting}\n\n"
         f'Agradecemos tu interés en la vacante "{vacancy_name}" y el tiempo que '
         "dedicaste al proceso de selección.\n\n"
-        "Después de revisar cuidadosamente los perfiles, en esta ocasión hemos "
-        "decidido avanzar con candidatos cuyo perfil se ajusta más a los "
-        "requerimientos específicos de esta posición.\n\n"
+        "Luego de revisar tu perfil, te compartimos el motivo de esta decisión:\n"
+        f"{reason}\n\n"
         "Te animamos a que continúes revisando nuestras vacantes disponibles; "
         "tu perfil podría encajar perfectamente en una futura oportunidad.\n\n"
         "Te deseamos mucho éxito en tu búsqueda profesional.\n\n"
@@ -569,11 +582,16 @@ def render_rejection_email(candidate_first_name: str, vacancy_name: str) -> Rend
                   Agradecemos tu interés en la vacante <strong>{vacancy_name}</strong>
                   y el tiempo que dedicaste al proceso de selección.
                 </p>
-                <p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#374151;">
-                  Después de revisar cuidadosamente los perfiles, en esta ocasión hemos
-                  decidido avanzar con candidatos cuyo perfil se ajusta más a los
-                  requerimientos específicos de esta posición.
+                <p style="margin:0 0 8px;font-size:15px;line-height:1.5;color:#374151;">
+                  Luego de revisar tu perfil, te compartimos el motivo de esta decisión:
                 </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 20px;">
+                  <tr>
+                    <td style="border-radius:8px;background:#f9fafb;border:1px solid #e5e7eb;padding:16px 20px;color:#374151;font-size:14px;line-height:1.5;">
+                      {safe_reason}
+                    </td>
+                  </tr>
+                </table>
                 <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
                   <tr>
                     <td style="border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;padding:16px 20px;color:#374151;font-size:14px;line-height:1.5;">

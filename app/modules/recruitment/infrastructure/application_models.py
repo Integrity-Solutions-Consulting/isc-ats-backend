@@ -52,6 +52,11 @@ class Application(Base, AuditMixin, SoftDeleteMixin):
         _fk("org.process_stages.id"), default=None
     )
     status_id: Mapped[int] = mapped_column(_fk("org.parameters.id"))
+    # Free-text reason shown to the candidate (email + in-app notification) when
+    # this application is rejected — either typed by HR in the Kanban move, or the
+    # fixed system copy used when the vacancy itself was closed/deleted (see
+    # applications_service.ApplicationService.auto_reject_for_vacancy).
+    rejection_reason: Mapped[str | None] = mapped_column(Text, default=None)
     salary_expectation: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), default=None)
     match_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), default=None)
     match_summary: Mapped[str | None] = mapped_column(Text, default=None)

@@ -29,6 +29,7 @@ from app.modules.org.infrastructure.models import (
     Department,
     Parameter,
     Process,
+    ProcessStage,
     ProfileTemplate,
 )
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
@@ -45,6 +46,7 @@ from app.modules.recruitment.api.vacancies_schemas import (
     VacancyStageItem,
     VacancyUpdate,
 )
+from app.modules.recruitment.application.applications_service import ApplicationService
 from app.modules.recruitment.application.poster_generator_service import generate_vacancy_poster
 from app.modules.recruitment.application.vacancies_service import (
     VacancyCloseError,
@@ -58,6 +60,10 @@ from app.modules.recruitment.application.vacancies_service import (
 from app.modules.recruitment.infrastructure.application_usage_repository import (
     ApplicationUsageRepository,
 )
+from app.modules.recruitment.infrastructure.applications_repository import (
+    ApplicationRepository,
+)
+from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.recruitment.infrastructure.models import Vacancy
 from app.modules.recruitment.infrastructure.pipeline_repository import (
     PipelineRepository,
@@ -201,6 +207,17 @@ async def get_vacancy_public(vacancy_id: int, session: SessionDep) -> PublicVaca
 
 def get_service(session: SessionDep) -> VacancyService:
     applications = ApplicationUsageRepository(session)
+    # Bound on the SAME session as the vacancy repository below, so the auto-reject
+    # fan-out (triggered from inside VacancyService.update()/delete()) shares one
+    # transaction with the vacancy's own status change / soft-delete — a failure
+    # anywhere rolls both back together (get_session commits once per request).
+    application_service = ApplicationService(
+        ApplicationRepository(session),
+        BaseRepository(session, Vacancy),
+        BaseRepository(session, Candidate),
+        BaseRepository(session, ProcessStage),
+        ParameterRepository(session),
+    )
     return VacancyService(
         BaseRepository(session, Vacancy),
         BaseRepository(session, Parameter),
@@ -211,6 +228,7 @@ def get_service(session: SessionDep) -> VacancyService:
         BaseRepository(session, ProfileTemplate),
         PipelineRepository(session),
         applications_checker=applications.has_active_for_vacancy,
+        application_rejector=application_service.auto_reject_for_vacancy,
     )
 
 
@@ -330,6 +348,7 @@ async def update_vacancy(
     service: ServiceDep,
     current_user: CurrentUserDep,
     caller_codes: PermissionCodesDep,
+    task_queue: TaskQueueDep,
 ) -> VacancyRead:
     try:
         updated = await service.update(
@@ -345,6 +364,10 @@ async def update_vacancy(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except VacancyCloseError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    # Closing the vacancy may have auto-rejected pending applications — notify
+    # each candidate (email + in-app), same background task as a manual reject.
+    for application_id in service.last_auto_rejected_application_ids:
+        await task_queue.enqueue("notify_rejection", application_id)
     return VacancyRead.model_validate(updated)
 
 
@@ -353,13 +376,19 @@ async def update_vacancy(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("recruitment.vacancies.delete"))],
 )
-async def delete_vacancy(vacancy_id: int, service: ServiceDep) -> None:
+async def delete_vacancy(
+    vacancy_id: int, service: ServiceDep, task_queue: TaskQueueDep
+) -> None:
     try:
         await service.delete(vacancy_id)
     except VacancyNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except VacancyInUseError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    # Deleting auto-rejects every non-hired active application — notify each
+    # candidate (email + in-app), same background task as a manual reject.
+    for application_id in service.last_auto_rejected_application_ids:
+        await task_queue.enqueue("notify_rejection", application_id)
 
 
 @router.get(

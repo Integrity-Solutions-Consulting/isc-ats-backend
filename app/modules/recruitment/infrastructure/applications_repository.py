@@ -25,3 +25,21 @@ class ApplicationRepository(BaseRepository[Application]):
             .where(Application.candidate_id == candidate_id)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_active_for_vacancy(
+        self, vacancy_id: int, *, exclude_status_id: int | None = None
+    ) -> list[Application]:
+        """Active applications for `vacancy_id`, optionally excluding one status.
+
+        Used by ApplicationService.auto_reject_for_vacancy to find every
+        application that must be auto-rejected when the vacancy closes/deletes
+        (every active one except those already 'hired').
+        """
+        stmt = (
+            select(Application)
+            .where(Application.vacancy_id == vacancy_id)
+            .where(Application.is_active.is_(True))
+        )
+        if exclude_status_id is not None:
+            stmt = stmt.where(Application.status_id != exclude_status_id)
+        return list((await self.session.execute(stmt)).scalars().all())

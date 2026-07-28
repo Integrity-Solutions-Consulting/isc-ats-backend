@@ -438,6 +438,53 @@ async def test_staff_create_keeps_supplied_status(session: AsyncSession) -> None
     assert application.status_id == hired.id
 
 
+# ── Vacancy name enrichment (BUG-24) ────────────────────────────────────────
+
+async def test_list_attaches_vacancy_name_even_when_vacancy_closed(
+    session: AsyncSession,
+) -> None:
+    """A candidate's applications list must show the real vacancy title even
+    after the vacancy's status changes away from active (e.g. closed) — only
+    the PUBLIC catalog is active-only, ApplicationRead.vacancy_name is not."""
+    vacancy, candidate, param = await _build_graph(session)
+    service = _service(session)
+    application = await service.create(_payload(vacancy, candidate, param), ACTOR)
+
+    closed = await ParameterRepository(session).get_by_type_and_code(
+        "vacancy_status", "closed"
+    )
+    if closed is not None:
+        vacancy.status_id = closed.id
+        await session.flush()
+
+    items, total = await service.list(
+        PageParams(page=1, size=20), candidate_id=candidate.id
+    )
+    assert total == 1
+    assert items[0].vacancy_name == "P"  # param.name from _build_graph
+
+    fetched = await service.get(application.id)
+    assert fetched.vacancy_name == "P"
+
+
+async def test_list_vacancy_name_none_when_vacancy_hard_deleted(
+    session: AsyncSession,
+) -> None:
+    """Only a hard-deleted (is_active=False) vacancy falls back to None — the
+    frontend renders its own placeholder copy for that edge case."""
+    vacancy, candidate, param = await _build_graph(session)
+    service = _service(session)
+    await service.create(_payload(vacancy, candidate, param), ACTOR)
+
+    vacancy.is_active = False
+    await session.flush()
+
+    items, _ = await service.list(
+        PageParams(page=1, size=20), candidate_id=candidate.id
+    )
+    assert items[0].vacancy_name is None
+
+
 async def test_candidate_create_raises_when_active_param_missing(session: AsyncSession) -> None:
     """Fix 1 regression: when application_status 'active' param resolves to None,
     a candidate-portal create must FAIL CLOSED with ApplicationReferenceError —

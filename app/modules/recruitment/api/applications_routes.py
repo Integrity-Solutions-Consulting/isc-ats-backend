@@ -33,6 +33,7 @@ from app.modules.recruitment.application.applications_service import (
     ApplicationReferenceError,
     ApplicationService,
     DuplicateApplicationError,
+    RejectionReasonRequiredError,
 )
 from app.modules.recruitment.infrastructure.application_models import (
     Application,
@@ -55,6 +56,14 @@ from app.shared.repository import BaseRepository
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/applications", tags=["recruitment · applications"])
+
+# Defensive fallback for _notify_rejection: rejection_reason should always be set
+# by the time this task runs (the manual path requires it via 400, the auto-reject
+# path always passes VacancyService.AUTO_REJECT_REASON), but the column is
+# nullable — a legacy/pre-migration row must still render a coherent email.
+_DEFAULT_REJECTION_REASON = (
+    "tu perfil no se ajusta a los requerimientos específicos de esta posición."
+)
 
 
 async def _require_candidate_owner(
@@ -158,8 +167,10 @@ async def _notify_rejection(application_id: int) -> None:
     """Background task: notify the candidate that their application was rejected.
 
     Professional wording — the candidate is told the profile did not match the
-    specific requirements (no misleading "process concluded" phrasing).  Creates
-    both an email and an in-app notification.
+    specific requirements (no misleading "process concluded" phrasing). Includes
+    the actual rejection_reason (HR free text, or the fixed system copy used when
+    the vacancy itself was closed/deleted). Creates both an email and an in-app
+    notification.
     """
     async with async_session_factory() as session:
         try:
@@ -183,9 +194,10 @@ async def _notify_rejection(application_id: int) -> None:
                 return
 
             vn = vacancy_name.name
+            reason = application.rejection_reason or _DEFAULT_REJECTION_REASON
 
             # 1) Email
-            rendered = render_rejection_email(candidate.first_name, vn)
+            rendered = render_rejection_email(candidate.first_name, vn, reason)
             dispatch = EmailDispatchService(session, build_email_sender())
             await dispatch.send(
                 EmailMessage(
@@ -203,7 +215,7 @@ async def _notify_rejection(application_id: int) -> None:
                     title="Actualización de tu postulación",
                     body=(
                         f"Tu postulación para {vn} no continuará en el proceso. "
-                        f"Te animamos a explorar otras vacantes."
+                        f"Motivo: {reason} Te animamos a explorar otras vacantes."
                     ),
                     related_entity_type="application",
                     related_entity_id=application.id,
@@ -314,6 +326,8 @@ async def update_application(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except ApplicationReferenceError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except RejectionReasonRequiredError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     # Notify the candidate when the Kanban stage actually changed.
     if updated.current_stage_id != old_stage_id:
         if updated.current_stage_id is not None:

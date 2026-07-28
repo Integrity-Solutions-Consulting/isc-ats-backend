@@ -231,7 +231,7 @@ async def test_set_stage_none_sets_rejected(session: AsyncSession) -> None:
 
     updated = await _service(session).update(
         app.id,
-        ApplicationUpdate(current_stage_id=None),
+        ApplicationUpdate(current_stage_id=None, rejection_reason="No cumple los requisitos."),
         ACTOR,
     )
     assert updated.status_id == status_params["rejected"].id, (
@@ -385,7 +385,9 @@ async def test_multiple_transitions_chain(session: AsyncSession) -> None:
 
     # → rejected (stage=None)
     app = await _service(session).update(
-        app.id, ApplicationUpdate(current_stage_id=None), ACTOR
+        app.id,
+        ApplicationUpdate(current_stage_id=None, rejection_reason="Perfil no ajusta."),
+        ACTOR,
     )
     assert app.status_id == status_params["rejected"].id
 
@@ -447,7 +449,7 @@ async def test_rejection_clears_substatus(session: AsyncSession) -> None:
 
     updated = await _service(session).update(
         app.id,
-        ApplicationUpdate(current_stage_id=None),
+        ApplicationUpdate(current_stage_id=None, rejection_reason="No avanza en el proceso."),
         ACTOR,
     )
     assert updated.current_status_id is None, (

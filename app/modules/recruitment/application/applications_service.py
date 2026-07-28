@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 from typing import Any
 
 from app.core.dependencies import CurrentUser
-from app.modules.org.infrastructure.models import ProcessStage
+from app.modules.org.infrastructure.models import Parameter, ProcessStage
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.modules.recruitment.api.applications_schemas import (
     ApplicationCreate,
@@ -28,6 +30,12 @@ class ApplicationReferenceError(Exception):
 
 class DuplicateApplicationError(Exception):
     """The candidate already has an active application to this vacancy."""
+
+
+class RejectionReasonRequiredError(Exception):
+    """A manual reject (Kanban move to the rejected column) was submitted with no
+    rejection_reason. Free text is mandatory so the candidate always receives a
+    concrete explanation — see ApplicationUpdate.rejection_reason."""
 
 
 class ApplicationService:
@@ -69,13 +77,45 @@ class ApplicationService:
             }.items()
             if v is not None
         }
-        return await self.repository.list(params, filters=filters or None)
+        items, total = await self.repository.list(params, filters=filters or None)
+        await self._attach_vacancy_names(items)
+        return items, total
 
     async def get(self, application_id: int) -> Application:
         application = await self.repository.get(application_id)
         if application is None:
             raise ApplicationNotFoundError(f"Application {application_id} not found")
+        await self._attach_vacancy_names([application])
         return application
+
+    async def _attach_vacancy_names(self, items: list[Application]) -> None:
+        """Set a transient `vacancy_name` attribute on each item (read by
+        ApplicationRead.model_validate — not a persisted column, never flushed).
+
+        Resolved regardless of the vacancy's status (draft/active/closed/paused) —
+        BUG-24: a candidate applied to a vacancy that later closed must still see
+        its real name in their applications list, not the "Vacante no disponible"
+        placeholder the frontend used to fall back to when cross-referencing the
+        PUBLIC (active-only) catalog. Only a hard-deleted (is_active=False)
+        vacancy resolves to None here; ownership of the underlying application is
+        already enforced by the route/service, so exposing a closed vacancy's name
+        is safe historical data, not a leak.
+        """
+        vacancy_ids = {i.vacancy_id for i in items}
+        if not vacancy_ids:
+            return
+        from sqlalchemy import select
+
+        stmt = (
+            select(Vacancy.id, Parameter.name)
+            .join(Parameter, Parameter.id == Vacancy.vacancy_name_id)
+            .where(Vacancy.id.in_(vacancy_ids))
+            .where(Vacancy.is_active.is_(True))
+        )
+        rows = (await self.vacancies.session.execute(stmt)).all()
+        names = {vid: name for vid, name in rows}
+        for item in items:
+            item.vacancy_name = names.get(item.vacancy_id)
 
     async def create(self, data: ApplicationCreate, actor: CurrentUser) -> Application:
         vacancy = await self.vacancies.get(data.vacancy_id)
@@ -127,7 +167,9 @@ class ApplicationService:
             changes["current_status_id"] = None
             changes["updated_by"] = actor.user_id
             changes["ip_updated"] = actor.ip
-            return await self.repository.update(existing, changes)
+            resurrected = await self.repository.update(existing, changes)
+            await self._attach_vacancy_names([resurrected])
+            return resurrected
 
         application_data = data.model_dump()
         application_data["current_stage_id"] = first_stage_id
@@ -138,7 +180,9 @@ class ApplicationService:
             created_by=actor.user_id,
             ip_created=actor.ip,
         )
-        return await self.repository.add(application)
+        created = await self.repository.add(application)
+        await self._attach_vacancy_names([created])
+        return created
 
     async def _assert_stage_in_process(self, vacancy_id: int, stage_id: int) -> None:
         """Reject a current_stage_id that does not belong to the vacancy's process."""
@@ -215,44 +259,122 @@ class ApplicationService:
         hired_id = hired_param.id if hired_param is not None else None
         active_id = active_param.id if active_param is not None else None
 
-        # Determine the resulting stage_id after this update.
+        # Only run the terminal-transition matrix when the caller is actually
+        # touching current_stage_id. Falling back to application.current_stage_id
+        # when the key is absent from `changes` would treat ANY unrelated PATCH
+        # (e.g. editing notes) as a stage transition whenever an application's
+        # current_stage_id already happens to be None for a reason other than
+        # rejection (e.g. created against a process with zero active stages,
+        # see _first_stage_id) — spuriously demanding a rejection_reason, or
+        # silently re-deriving status_id, for an update that never touched the
+        # stage at all.
         if "current_stage_id" in changes:
             new_stage_id = changes["current_stage_id"]
-        else:
-            new_stage_id = application.current_stage_id
+            existing_status_id = application.status_id
 
-        existing_status_id = application.status_id
-
-        if new_stage_id is None:
-            # Stage set to None → rejection, unless already rejected.
-            if existing_status_id != rejected_id and rejected_id is not None:
-                changes["status_id"] = rejected_id
-                # Remember the stage they had reached before current_stage_id is
-                # nulled, so the candidate UI can show how far they advanced.
-                changes["rejected_at_stage_id"] = application.current_stage_id
-            # Terminal stage has no sub-status — clear it.
-            changes["current_status_id"] = None
-        else:
-            # Stage is being set to a concrete stage — inspect is_final_positive.
-            new_stage = await self.process_stages.get(new_stage_id)
-            if new_stage is not None and new_stage.is_final_positive:
-                # Moving to (or staying on) a final-positive stage → hired.
-                if hired_id is not None:
-                    changes["status_id"] = hired_id
-                # Terminal stage has no sub-status — clear it.
-                changes["current_status_id"] = None
-            elif existing_status_id == hired_id and active_id is not None:
-                # Moving OFF a final-positive stage to a non-final stage → reactivate.
-                changes["status_id"] = active_id
-            # Otherwise (normal non-terminal move): status_id unchanged.
+            if new_stage_id is None:
+                # Stage set to None → rejection, unless already rejected.
+                if existing_status_id != rejected_id and rejected_id is not None:
+                    if not data.rejection_reason:
+                        raise RejectionReasonRequiredError(
+                            "rejection_reason is required when rejecting an application"
+                        )
+                    changes.update(
+                        await self._rejection_changes(application, data.rejection_reason)
+                    )
+                else:
+                    # Already rejected — no real transition; still clear any stale
+                    # sub-status (terminal stages have none).
+                    changes["current_status_id"] = None
+            else:
+                # Stage is being set to a concrete stage — inspect is_final_positive.
+                new_stage = await self.process_stages.get(new_stage_id)
+                if new_stage is not None and new_stage.is_final_positive:
+                    # Moving to (or staying on) a final-positive stage → hired.
+                    if hired_id is not None:
+                        changes["status_id"] = hired_id
+                    # Terminal stage has no sub-status — clear it.
+                    changes["current_status_id"] = None
+                elif existing_status_id == hired_id and active_id is not None:
+                    # Moving OFF a final-positive stage to a non-final stage → reactivate.
+                    changes["status_id"] = active_id
+                # Otherwise (normal non-terminal move): status_id unchanged.
 
         changes["updated_by"] = actor.user_id
         changes["ip_updated"] = actor.ip
-        return await self.repository.update(application, changes)
+        updated = await self.repository.update(application, changes)
+        await self._attach_vacancy_names([updated])
+        return updated
 
     async def delete(self, application_id: int) -> None:
         application = await self.get(application_id)
         await self.repository.soft_delete(application)
+
+    async def _rejection_changes(
+        self, application: Application, reason: str, rejected_id: int | None = None
+    ) -> dict[str, Any]:
+        """The field changes that constitute "reject this application with `reason`".
+
+        Single source of truth for the rejection transition, shared by the manual
+        Kanban-reject path (update(), above) and the auto-reject fan-out
+        (auto_reject_for_vacancy(), below) — both branches must set exactly the
+        same fields so a reject is a reject regardless of who triggered it.
+
+        `rejected_id` lets a caller that already resolved the 'rejected'
+        application_status id (e.g. a loop over many applications) pass it in
+        directly instead of re-querying org.parameters once per application.
+        """
+        if rejected_id is None:
+            rejected_param = await self.parameters.get_by_type_and_code(
+                "application_status", "rejected"
+            )
+            rejected_id = rejected_param.id if rejected_param is not None else None
+        changes: dict[str, Any] = {
+            # Remember the stage they had reached before current_stage_id is
+            # nulled, so the candidate UI can show how far they advanced.
+            "rejected_at_stage_id": application.current_stage_id,
+            "current_stage_id": None,
+            # Terminal stage has no sub-status — clear it.
+            "current_status_id": None,
+            "rejection_reason": reason,
+        }
+        if rejected_id is not None:
+            changes["status_id"] = rejected_id
+        return changes
+
+    async def auto_reject_for_vacancy(self, vacancy_id: int, reason: str) -> list[Application]:
+        """Reject every non-hired active application of `vacancy_id` with `reason`.
+
+        Called by VacancyService when a vacancy transitions to 'closed' or is
+        deleted, so no active application is left dangling behind a vacancy that
+        stopped accepting candidates. Applications already 'hired' are left
+        untouched — a hire is a completed, successful outcome independent of the
+        vacancy's own lifecycle. Applications already rejected are skipped (a
+        no-op that would otherwise re-fire the rejection email/notification).
+
+        Returns the applications that were actually transitioned, so the caller
+        (the API route) can fan out the candidate email + in-app notification for
+        each — this service has no access to the request's task queue.
+        """
+        rejected_param = await self.parameters.get_by_type_and_code(
+            "application_status", "rejected"
+        )
+        rejected_id = rejected_param.id if rejected_param is not None else None
+        hired_param = await self.parameters.get_by_type_and_code(
+            "application_status", "hired"
+        )
+        hired_id = hired_param.id if hired_param is not None else None
+
+        candidates = await self.repository.list_active_for_vacancy(
+            vacancy_id, exclude_status_id=hired_id
+        )
+        rejected: list[Application] = []
+        for application in candidates:
+            if rejected_id is not None and application.status_id == rejected_id:
+                continue
+            changes = await self._rejection_changes(application, reason, rejected_id)
+            rejected.append(await self.repository.update(application, changes))
+        return rejected
 
     async def _validate_optional(self, values: dict[str, Any]) -> None:
         await self._assert(self.process_stages, values.get("current_stage_id"), "current_stage_id")

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop
   workflow_dispatch:
 
 env:
@@ -38,6 +39,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
             type=sha,prefix=,format=short
 
       - name: Build y push de la imagen
@@ -53,10 +55,12 @@ jobs:
 
       - name: Disparar redeploy en Dokploy
         if: success()
+        env:
+          WEBHOOK_URL: ${{ github.ref == 'refs/heads/develop' && secrets.DOKPLOY_WEBHOOK_URL_DEVELOP || secrets.DOKPLOY_WEBHOOK_URL }}
         run: |
-          if [ -n "${{ secrets.DOKPLOY_WEBHOOK_URL }}" ]; then
+          if [ -n "$WEBHOOK_URL" ]; then
             echo "Disparando redeploy en Dokploy..."
-            curl -fsS -X POST "${{ secrets.DOKPLOY_WEBHOOK_URL }}"
+            curl -fsS -X POST "$WEBHOOK_URL"
           else
-            echo "DOKPLOY_WEBHOOK_URL no está configurado; se omite el redeploy."
+            echo "Webhook no está configurado para esta rama; se omite el redeploy."
           fi
