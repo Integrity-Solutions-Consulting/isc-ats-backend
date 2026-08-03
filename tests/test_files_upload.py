@@ -177,7 +177,7 @@ async def test_upload_rejects_candidate_for_staff_entity_type(
         data={"entity_type": "vacancy_image"},
     )
     assert res.status_code == 403
-    assert "restricted" in res.json()["detail"].lower()
+    assert "permiso" in res.json()["detail"].lower()
 
 
 # ── Storage/RAM DoS defenses: CV cap 5 MiB + per-account CV quota ──────────────

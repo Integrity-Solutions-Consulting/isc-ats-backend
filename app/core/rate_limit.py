@@ -42,7 +42,7 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Res
             pass
     return JSONResponse(
         status_code=429,
-        content={"detail": "Demasiadas solicitudes. Intentá nuevamente más tarde."},
+        content={"detail": "Demasiadas solicitudes. Intenta nuevamente más tarde."},
         headers={"Retry-After": str(retry_after)},
     )
 

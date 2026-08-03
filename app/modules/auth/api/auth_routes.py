@@ -247,7 +247,7 @@ async def login(
         # so this never reveals whether the account actually exists.
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
-            "Demasiados intentos fallidos. Intentá nuevamente más tarde.",
+            "Demasiados intentos fallidos. Intenta nuevamente más tarde.",
             headers={"Retry-After": str(exc.retry_after)},
         ) from exc
     except InvalidCredentialsError as exc:

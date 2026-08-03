@@ -77,4 +77,4 @@ async def test_candidate_with_permission_still_forbidden(
     # require_permission passes now, but the portal guard must still reject.
     res = await client.get(LIST_URL, headers=_bearer(cand.id, portal="candidate"))
     assert res.status_code == 403
-    assert "Staff-only" in res.json()["detail"]
+    assert "personal interno" in res.json()["detail"]

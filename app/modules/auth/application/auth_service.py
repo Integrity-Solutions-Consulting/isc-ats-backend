@@ -143,13 +143,13 @@ class AuthService:
         if outcome is TurnstileOutcome.FAILED:
             raise TurnstileError(
                 "No pudimos verificar que no seas un robot. "
-                "Recargá la página e intentá de nuevo."
+                "Recarga la página e intenta de nuevo."
             )
         # UNAVAILABLE
         if fail_closed:
             raise TurnstileError(
                 "No pudimos completar la verificación de seguridad. "
-                "Intentá nuevamente en unos minutos."
+                "Intenta nuevamente en unos minutos."
             )
 
     async def _revoke_access_tokens(self, user_id: int) -> None:

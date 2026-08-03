@@ -10,6 +10,7 @@ from app.core.login_throttle import InMemoryLoginThrottle, build_login_throttle
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.core.task_queue import InlineTaskQueue, build_task_queue
 from app.core.token_denylist import InMemoryTokenDenylist, build_token_denylist
+from app.core.validation_errors import register_validation_error_handler
 from app.modules.storage.infrastructure.minio_client import init_minio
 
 
@@ -59,6 +60,10 @@ def create_app() -> FastAPI:
     # tripped limit into 429 with a Retry-After header.
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+    # Request-validation failures answer in Spanish. Without this, Pydantic's
+    # English `msg` reaches the user through the frontend proxy.
+    register_validation_error_handler(app)
 
     # Safe defaults so app.state.task_queue / token_denylist always exist, even
     # when the lifespan does not run (ASGITransport in tests). The lifespan

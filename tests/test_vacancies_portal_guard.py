@@ -129,7 +129,7 @@ async def test_candidate_forbidden_on_staff_vacancy_endpoints(
     method = client.post if path in _POST_PATHS else client.get
     res = await method(BASE + path, headers=_bearer(cand_id, portal="candidate"))
     assert res.status_code == 403, f"{path} leaked to candidate portal"
-    assert "Staff-only" in res.json()["detail"]
+    assert "personal interno" in res.json()["detail"]
 
 
 async def test_candidate_can_still_reach_vacancy_stages(

@@ -319,4 +319,6 @@ async def test_create_role_endpoint_403_without_permission(
         headers=_bearer(unprivileged.id),
     )
     assert r.status_code == 403
-    assert "auth.roles.create" in r.json()["detail"]
+    # The missing permission code is logged, not shown — see test_guards_http.
+    assert "auth.roles.create" not in r.json()["detail"]
+    assert "permiso" in r.json()["detail"].lower()

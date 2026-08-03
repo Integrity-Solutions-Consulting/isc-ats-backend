@@ -110,7 +110,9 @@ async def test_list_users_forbids_user_without_permission(
     user = await _make_user(session)
     response = await client.get(USERS_URL, headers=_bearer(user.id))
     assert response.status_code == 403
-    assert "auth.users.read" in response.json()["detail"]
+    # The missing permission code is logged, not shown — see test_guards_http.
+    assert "auth.users.read" not in response.json()["detail"]
+    assert "permiso" in response.json()["detail"].lower()
 
 
 async def test_list_users_allows_admin(
@@ -186,7 +188,8 @@ async def test_patch_user_forbids_user_without_permission(
         headers=_bearer(actor.id),
     )
     assert response.status_code == 403
-    assert "auth.users.update" in response.json()["detail"]
+    assert "auth.users.update" not in response.json()["detail"]
+    assert "permiso" in response.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +283,8 @@ async def test_create_user_requires_permission(
         headers=_bearer(actor.id),
     )
     assert response.status_code == 403
-    assert "auth.users.create" in response.json()["detail"]
+    assert "auth.users.create" not in response.json()["detail"]
+    assert "permiso" in response.json()["detail"].lower()
 
 
 async def test_create_user_success(
@@ -566,7 +570,7 @@ async def test_create_user_rejects_invalid_role(
         headers=_bearer(admin.user_id),
     )
     assert response.status_code == 400
-    assert "Role" in response.json()["detail"]
+    assert "rol" in response.json()["detail"].lower()
 
 
 async def test_created_user_can_login(

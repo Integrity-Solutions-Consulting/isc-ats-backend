@@ -211,7 +211,7 @@ class VacancyService:
         if pipeline.hired_count < openings:
             raise VacancyCloseError(
                 f"No se puede cerrar la vacante: {pipeline.hired_count} de {openings} "
-                "vacantes cubiertas. Usá el estado 'Cancelada' para cerrarla sin cubrir."
+                "vacantes cubiertas. Usa el estado 'Cancelada' para cerrarla sin cubrir."
             )
         return new_status
 
@@ -260,7 +260,7 @@ class VacancyService:
         if self.applications_checker is not None and await self.applications_checker(vacancy_id):
             raise VacancyInUseError(
                 "No se puede eliminar la vacante: tiene candidatos contratados. "
-                "Usá el estado 'Cancelada' para cerrarla sin perder el historial."
+                "Usa el estado 'Cancelada' para cerrarla sin perder el historial."
             )
         await self.repository.soft_delete(vacancy)
         # Deleting removes the vacancy from the running entirely, so every

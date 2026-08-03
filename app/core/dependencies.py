@@ -37,14 +37,14 @@ async def get_current_user(
     except jwt.PyJWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
+            detail="Tu sesión expiró. Inicia sesión de nuevo.",
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
 
     if payload.get("type") != "access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token type",
+            detail="Tu sesión no es válida. Inicia sesión de nuevo.",
         )
 
     user_id = int(payload["sub"])
@@ -57,7 +57,7 @@ async def get_current_user(
     if issued_at is not None and await denylist.is_user_revoked(user_id, int(issued_at)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token revoked",
+            detail="Tu sesión se cerró por seguridad. Inicia sesión de nuevo.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

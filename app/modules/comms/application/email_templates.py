@@ -798,7 +798,7 @@ def render_solicitud_created_email(recipient_email: str, vacancy_title: str) -> 
         "Se ha creado una nueva solicitud de vacante en el sistema de reclutamiento de "
         "Integrity Solutions.\n\n"
         f"Vacante: {vacancy_title}\n\n"
-        "Ingresá al portal para revisar y gestionar esta solicitud:\n"
+        "Ingresa al portal para revisar y gestionar esta solicitud:\n"
         f"{portal_url}\n\n"
         "Este correo fue generado automáticamente."
     )
@@ -831,7 +831,7 @@ def render_solicitud_created_email(recipient_email: str, vacancy_title: str) -> 
                   </tr>
                 </table>
                 <p style="margin:0 0 24px;font-size:15px;line-height:1.5;color:#374151;">
-                  Ingresá al portal de reclutamiento para revisar los detalles y gestionar esta solicitud.
+                  Ingresa al portal de reclutamiento para revisar los detalles y gestionar esta solicitud.
                 </p>
                 <table role="presentation" cellpadding="0" cellspacing="0">
                   <tr>

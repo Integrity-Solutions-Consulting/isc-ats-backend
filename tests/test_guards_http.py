@@ -4,6 +4,7 @@ Overrides get_session so the ASGI app reuses the rolled-back test session, which
 already contains the bootstrapped admin (flushed, not committed).
 """
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 
@@ -62,7 +63,7 @@ async def test_guarded_route_rejects_missing_token(client: AsyncClient) -> None:
 
 
 async def test_guarded_route_forbids_user_without_permission(
-    client: AsyncClient, session: AsyncSession
+    client: AsyncClient, session: AsyncSession, caplog: pytest.LogCaptureFixture
 ) -> None:
     portal = await ParameterRepository(session).get_by_type_and_code("user_portal", "staff")
     assert portal is not None
@@ -70,10 +71,17 @@ async def test_guarded_route_forbids_user_without_permission(
         User(email=f"{uuid.uuid4().hex[:12]}@test.local", portal_id=portal.id)
     )
 
-    response = await client.get(GUARDED_URL, headers=_bearer(user.id))
+    with caplog.at_level(logging.INFO, logger="app.modules.auth.api.authorization"):
+        response = await client.get(GUARDED_URL, headers=_bearer(user.id))
 
     assert response.status_code == 403
-    assert "org.departments.read" in response.json()["detail"]
+    # The permission code is internal RBAC contract: naming it on screen tells the
+    # user nothing and exposes the layout. It must reach the log instead, where
+    # support can still diagnose a denial.
+    detail = response.json()["detail"]
+    assert "org.departments.read" not in detail
+    assert "permiso" in detail.lower()
+    assert "org.departments.read" in caplog.text
 
 
 async def test_guarded_route_allows_admin(

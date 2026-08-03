@@ -188,8 +188,8 @@ class InterviewService:
             session.add(
                 Notification(
                     recipient_id=candidate_user_id,
-                    title="Tenés horarios para tu entrevista",
-                    body="Elegí el horario que mejor te quede para tu entrevista.",
+                    title="Tienes horarios para tu entrevista",
+                    body="Elige el horario que mejor te quede para tu entrevista.",
                     related_entity_type="interview",
                     related_entity_id=interview.id,
                     created_by=actor.user_id,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated
 
@@ -19,6 +20,8 @@ from app.modules.auth.infrastructure.repository import (
 )
 from app.modules.org.infrastructure.parameters_repository import ParameterRepository
 from app.shared.pagination import Page, PageParams
+
+logger = logging.getLogger(__name__)
 
 
 class UserRead(BaseModel):
@@ -157,7 +160,7 @@ async def create_user(
     if role is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Role {data.role_id} not found or inactive",
+            detail="El rol seleccionado no existe o está inactivo.",
         )
 
     # Check email uniqueness. Case-insensitive and whitespace-tolerant so
@@ -172,15 +175,21 @@ async def create_user(
     if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"A user with email '{data.email}' already exists",
+            detail=f"Ya existe un usuario con el correo {data.email}.",
         )
 
     # Resolve the staff portal id.
     portal = await ParameterRepository(session).get_by_type_and_code("user_portal", "staff")
     if portal is None:
+        # Server misconfiguration, not something the user did or can fix — the
+        # actionable detail (run bootstrap) belongs in the log, not on screen.
+        logger.error("Parameter user_portal:staff is missing — run bootstrap first")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="user_portal:staff parameter not found — run bootstrap first",
+            detail=(
+                "No se pudo crear el usuario por un problema de configuración. "
+                "Comunícate con el administrador del sistema."
+            ),
         )
 
     repo = UserRepository(session)
@@ -229,14 +238,17 @@ async def update_user_status(
     if not data.is_active and user_id == current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot deactivate your own account (self-deactivation not allowed)",
+            detail="No puedes desactivar tu propia cuenta.",
         )
 
     # Fetch user regardless of is_active status so we can reactivate
     stmt = select(User).where(User.id == user_id)
     user = (await session.execute(stmt)).scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="El usuario no existe.",
+        )
 
     # A reactivation resends the welcome email ONLY when this user never made it
     # past their original invite (never logged in, still on the must-change

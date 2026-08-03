@@ -162,7 +162,7 @@ async def download_file(
         logger.exception("Object storage fetch failed for file %s", file_id)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Error fetching file from storage",
+            detail="No se pudo descargar el archivo. Intenta de nuevo en unos minutos.",
         ) from exc
 
     def _iter():
@@ -216,14 +216,19 @@ async def upload_file(
     if entity_type not in FILE_ENTITY_TYPES:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"entity_type must be one of: {', '.join(sorted(FILE_ENTITY_TYPES))}",
+            # entity_type is an internal API field with no Spanish label — naming
+            # it keeps the message diagnosable for the callers that send it.
+            detail=(
+                "El tipo de archivo (entity_type) no es válido. "
+                f"Valores permitidos: {', '.join(sorted(FILE_ENTITY_TYPES))}."
+            ),
         )
     # Candidates may only upload their own CVs and avatars; staff-only types
     # (vacancy_image, word_doc) are rejected for candidate-portal tokens.
     if is_candidate_portal(current_user) and entity_type not in _CANDIDATE_ENTITY_TYPES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Candidate uploads restricted to: {', '.join(sorted(_CANDIDATE_ENTITY_TYPES))}",
+            detail="No tienes permiso para subir este tipo de archivo.",
         )
 
     # Read at most one byte past the cap so an oversized body is rejected without
@@ -251,7 +256,7 @@ async def upload_file(
         ):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Alcanzaste el límite de CVs. Eliminá alguno antes de subir otro.",
+                detail="Alcanzaste el límite de hojas de vida. Elimina alguna antes de subir otra.",
             )
 
     # Avatars are downscaled to a small JPEG thumbnail before storage — the
@@ -275,7 +280,7 @@ async def upload_file(
         logger.exception("Object storage upload failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Error uploading to object storage",
+            detail="No se pudo guardar el archivo. Intenta de nuevo en unos minutos.",
         ) from exc
 
     file_record = FileCreate(

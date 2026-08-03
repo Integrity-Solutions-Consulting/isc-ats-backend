@@ -26,7 +26,7 @@ def require_owner(user: CurrentUser, owner_user_id: int | None) -> None:
     if is_candidate_portal(user) and owner_user_id != user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Resource belongs to another user",
+            detail="No tienes permiso para acceder a esta información.",
         )
 
 
@@ -35,5 +35,5 @@ def forbid_candidate_portal(user: CurrentUser) -> None:
     if is_candidate_portal(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Staff-only endpoint",
+            detail="Esta sección está disponible solo para el personal interno.",
         )
