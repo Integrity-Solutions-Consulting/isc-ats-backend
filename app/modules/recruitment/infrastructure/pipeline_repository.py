@@ -35,6 +35,8 @@ class CardRow:
     first_name: str
     last_name: str
     avatar_file_id: int | None
+    city: str | None
+    is_studying: bool
     salary_expectation: float | None
     match_score: float | None
     updated_at: str | None
@@ -99,6 +101,11 @@ class PipelineRepository:
         stages = [StageRow(**row._asdict()) for row in stage_rows]
 
         # ── Application cards ──────────────────────────────────────────────────
+        # `city` and `is_studying` feed the board's candidate filters. City is an
+        # outer join: candidates.city_id is nullable, and an inner join would
+        # silently drop every applicant who never set a city.
+        CityParam = aliased(Parameter, name="card_city")
+
         cards_stmt = (
             select(
                 Application.id,
@@ -108,12 +115,15 @@ class PipelineRepository:
                 Candidate.first_name,
                 Candidate.last_name,
                 Candidate.avatar_file_id,
+                CityParam.name.label("city"),
+                Candidate.is_studying,
                 Application.salary_expectation,
                 Application.match_score,
                 Application.updated_at,
                 Application.created_at,
             )
             .join(Candidate, Application.candidate_id == Candidate.id)
+            .outerjoin(CityParam, Candidate.city_id == CityParam.id)
             .where(Application.vacancy_id == vacancy_id)
             .where(Application.is_active.is_(True))
             .order_by(Application.applied_at)

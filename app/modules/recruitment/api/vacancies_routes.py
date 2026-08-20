@@ -610,7 +610,13 @@ async def get_vacancy_pipeline(
             matchPercent=float(c.match_score) if c.match_score else None,
             matchStatus="done" if c.match_score else "analyzing",
             stageStatus="pending_review",
-            salaryExpectation=int(c.salary_expectation) if c.salary_expectation else 0,
+            city=c.city,
+            isStudying=c.is_studying,
+            # `is not None` — not a truthiness check: a declared expectation of 0
+            # is a real answer and must not be reported as "undeclared".
+            salaryExpectation=(
+                int(c.salary_expectation) if c.salary_expectation is not None else None
+            ),
             updatedAt=(c.updated_at.isoformat() if c.updated_at else c.created_at.isoformat()),
         )
         for c in data.cards

@@ -147,7 +147,12 @@ class PipelineCardSchema(BaseModel):
     matchPercent: float | None
     matchStatus: Literal["analyzing", "done"] = "analyzing"
     stageStatus: str = "pending_review"
-    salaryExpectation: int = 0
+    city: str | None = None
+    isStudying: bool = False
+    # None means "the candidate never declared an expectation" — distinct from a
+    # declared 0. Collapsing both into 0 makes undeclared applicants match any
+    # salary range starting at 0, which silently corrupts the board filter.
+    salaryExpectation: int | None = None
     updatedAt: str
 
 
