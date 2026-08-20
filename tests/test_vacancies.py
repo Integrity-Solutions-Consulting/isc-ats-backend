@@ -171,7 +171,12 @@ async def test_pipeline_returns_stages_and_cards(session: AsyncSession) -> None:
         ParameterRepository(session),
     )
     await app_service.create(
-        ApplicationCreate(vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=param.id),
+        ApplicationCreate(
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=param.id,
+            salary_expectation=1200,
+        ),
         ACTOR,
     )
 
@@ -253,7 +258,10 @@ async def test_pipeline_hired_count_increments_when_candidate_reaches_final_posi
     )
     app = await app_service.create(
         ApplicationCreate(
-            vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=stage_param.id
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=stage_param.id,
+            salary_expectation=1200,
         ),
         ACTOR,
     )

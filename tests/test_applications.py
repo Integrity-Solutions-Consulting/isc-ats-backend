@@ -107,7 +107,10 @@ async def _build_graph(session: AsyncSession) -> tuple[Vacancy, Candidate, Param
 
 def _payload(vacancy: Vacancy, candidate: Candidate, param: Parameter) -> ApplicationCreate:
     return ApplicationCreate(
-        vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=param.id
+        vacancy_id=vacancy.id,
+        candidate_id=candidate.id,
+        status_id=param.id,
+        salary_expectation=1200,
     )
 
 
@@ -144,7 +147,12 @@ async def test_withdrawn_application_is_resurrected(session: AsyncSession) -> No
 
 async def test_create_application_rejects_unknown_candidate(session: AsyncSession) -> None:
     vacancy, _candidate, param = await _build_graph(session)
-    data = ApplicationCreate(vacancy_id=vacancy.id, candidate_id=999999, status_id=param.id)
+    data = ApplicationCreate(
+        vacancy_id=vacancy.id,
+        candidate_id=999999,
+        status_id=param.id,
+        salary_expectation=1200,
+    )
     with pytest.raises(ApplicationReferenceError):
         await _service(session).create(data, ACTOR)
 
@@ -414,7 +422,10 @@ async def test_candidate_create_forces_active_status(session: AsyncSession) -> N
 
     application = await _service(session).create(
         ApplicationCreate(
-            vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=hired.id
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=hired.id,
+            salary_expectation=1200,
         ),
         CANDIDATE_ACTOR,
     )
@@ -431,7 +442,10 @@ async def test_staff_create_keeps_supplied_status(session: AsyncSession) -> None
 
     application = await _service(session).create(
         ApplicationCreate(
-            vacancy_id=vacancy.id, candidate_id=candidate.id, status_id=hired.id
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=hired.id,
+            salary_expectation=1200,
         ),
         ACTOR,
     )
@@ -507,6 +521,7 @@ async def test_candidate_create_raises_when_active_param_missing(session: AsyncS
                 vacancy_id=vacancy.id,
                 candidate_id=candidate.id,
                 status_id=_param.id,
+                salary_expectation=1200,
             ),
             CANDIDATE_ACTOR,
         )

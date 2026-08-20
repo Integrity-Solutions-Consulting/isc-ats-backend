@@ -182,6 +182,7 @@ async def _create_app(
             vacancy_id=vacancy.id,
             candidate_id=candidate.id,
             status_id=status_p.id,
+            salary_expectation=1200,
         ),
         ACTOR,
     )
@@ -257,6 +258,7 @@ async def test_already_rejected_app_is_noop(session: AsyncSession) -> None:
             vacancy_id=vacancy.id,
             candidate_id=candidate.id,
             status_id=rejected_p.id,
+            salary_expectation=1200,
         ),
         ACTOR,
     )

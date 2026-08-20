@@ -127,7 +127,12 @@ async def _setup_vacancy(session: AsyncSession, *, openings: int, hired: int) ->
             Candidate(user_id=user.id, first_name=f"H{i}", last_name="Hired")
         )
         app = await app_service.create(
-            ApplicationCreate(vacancy_id=vacancy.id, candidate_id=cand.id, status_id=sp.id),
+            ApplicationCreate(
+                vacancy_id=vacancy.id,
+                candidate_id=cand.id,
+                status_id=sp.id,
+                salary_expectation=1200,
+            ),
             ACTOR,
         )
         await app_service.update(

@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ApplicationCreate(BaseModel):
@@ -10,7 +10,15 @@ class ApplicationCreate(BaseModel):
     status_id: int
     current_stage_id: int | None = None
     current_status_id: int | None = None
-    salary_expectation: Decimal | None = None
+    # Required: Talento Humano filters the Kanban by salary range, and an
+    # undeclared expectation cannot be placed inside any range. The candidate
+    # portal already demands it, but that guard lives in the browser — this is
+    # the door every client has to go through. 0 is a valid declared answer.
+    #
+    # The recruitment.applications column stays NULLABLE on purpose: pre-existing
+    # rows must not be backfilled with invented figures, and a future staff-side
+    # flow (HR adding a candidate to a vacancy) may not know the expectation.
+    salary_expectation: Decimal = Field(ge=0)
 
 
 class ApplicationUpdate(BaseModel):

@@ -262,7 +262,12 @@ async def test_candidate_cannot_read_another_application(
     _, (user_a, cand_a), (user_b, _) = two_candidates
     vacancy, param = await _vacancy_graph(session)
     application = await _applications_service(session).create(
-        ApplicationCreate(vacancy_id=vacancy.id, candidate_id=cand_a.id, status_id=param.id),
+        ApplicationCreate(
+            vacancy_id=vacancy.id,
+            candidate_id=cand_a.id,
+            status_id=param.id,
+            salary_expectation=1200,
+        ),
         CurrentUser(user_id=user_a.id, ip="127.0.0.1"),
     )
 
@@ -279,9 +284,16 @@ async def test_candidate_cannot_apply_as_another_candidate(
     _, (_, cand_a), (user_b, _) = two_candidates
     vacancy, param = await _vacancy_graph(session)
 
+    # The body must be schema-valid, otherwise Pydantic answers 422 before the
+    # ownership guard ever runs and the test would pass for the wrong reason.
     response = await client.post(
         APPLICATIONS_URL,
-        json={"vacancy_id": vacancy.id, "candidate_id": cand_a.id, "status_id": param.id},
+        json={
+            "vacancy_id": vacancy.id,
+            "candidate_id": cand_a.id,
+            "status_id": param.id,
+            "salary_expectation": 1200,
+        },
         headers=_bearer(user_b.id),
     )
 
@@ -295,7 +307,12 @@ async def test_applications_list_is_scoped_to_own_candidate(
     _, (user_a, cand_a), (user_b, cand_b) = two_candidates
     vacancy, param = await _vacancy_graph(session)
     await _applications_service(session).create(
-        ApplicationCreate(vacancy_id=vacancy.id, candidate_id=cand_a.id, status_id=param.id),
+        ApplicationCreate(
+            vacancy_id=vacancy.id,
+            candidate_id=cand_a.id,
+            status_id=param.id,
+            salary_expectation=1200,
+        ),
         CurrentUser(user_id=user_a.id, ip="127.0.0.1"),
     )
 
