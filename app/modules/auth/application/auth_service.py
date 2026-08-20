@@ -18,8 +18,16 @@ from app.core.security import (
 )
 from app.core.token_denylist import TokenDenylist
 from app.modules.auth.application.bootstrap_service import CANDIDATE_ROLE_NAME
+from app.modules.auth.application.consents_service import ConsentsService
 from app.modules.auth.application.turnstile import TurnstileOutcome, TurnstileVerifier
-from app.modules.auth.infrastructure.models import RefreshToken, Role, User, UserRole
+from app.modules.auth.infrastructure.models import (
+    CONSENT_MARKETING,
+    CONSENT_TERMS_PRIVACY,
+    RefreshToken,
+    Role,
+    User,
+    UserRole,
+)
 from app.modules.auth.infrastructure.repository import (
     RefreshTokenRepository,
     UserRepository,
@@ -113,6 +121,7 @@ class AuthService:
         users: UserRepository,
         refresh_tokens: RefreshTokenRepository,
         parameters: ParameterRepository,
+        consents: ConsentsService,
         has_profile_checker: ProfileChecker | None = None,
         token_denylist: TokenDenylist | None = None,
         login_throttle: LoginThrottle | None = None,
@@ -121,6 +130,7 @@ class AuthService:
         self.users = users
         self.refresh_tokens = refresh_tokens
         self.parameters = parameters
+        self.consents = consents
         self.has_profile_checker = has_profile_checker
         self.token_denylist = token_denylist
         self.login_throttle = login_throttle
@@ -282,6 +292,14 @@ class AuthService:
         password: str,
         ip: str | None,
         turnstile_token: str | None = None,
+        *,
+        # Default True: the API schema (RegisterRequest) already rejects False
+        # with a 422 before this is ever called from a real request, so this
+        # default only spares unrelated internal/test callers that don't
+        # exercise consent behaviour. accepts_marketing has no such upstream
+        # gate, so it defaults to the safe "not decided yet" False (D3).
+        accepts_terms: bool = True,
+        accepts_marketing: bool = False,
     ) -> RegistrationResult:
         # Anti-bot gate first — registration is the abuse funnel, so it fails
         # CLOSED: a FAILED verdict OR an unreachable Cloudflare both block.
@@ -308,6 +326,17 @@ class AuthService:
                 # (see verify_email). Prevents takeover of an abandoned account.
                 existing_user.password_hash = hash_password(password)
                 await self.users.session.flush()
+                # Re-affirm terms/privacy consent on every reactivation. Safe to
+                # call unconditionally: grant() revokes-then-inserts (D1), so it
+                # never collides with the still-active row from the original
+                # registration. Marketing consent is deliberately left untouched
+                # here — whatever state it was in before stays as-is.
+                await self.consents.grant(
+                    existing_user.id,
+                    CONSENT_TERMS_PRIVACY,
+                    source="registration",
+                    ip_address=ip,
+                )
                 return RegistrationResult(user=existing_user, reactivation=True)
             raise EmailAlreadyExistsError("El correo electrónico ya está registrado")
 
@@ -336,6 +365,21 @@ class AuthService:
         user_role = UserRole(user_id=new_user.id, role_id=role.id)
         self.users.session.add(user_role)
         await self.users.session.flush()
+
+        # Same transaction/session as the User + UserRole inserts above — nothing
+        # is committed until the request layer's get_session commits at the end,
+        # so a failure here rolls back the whole registration atomically (R1).
+        await self.consents.grant(
+            new_user.id, CONSENT_TERMS_PRIVACY, source="registration", ip_address=ip
+        )
+        # D3: an unchecked marketing box means "not decided yet", not "declined".
+        # Insert NOTHING when False — not even a refusal row — so the Slice-3
+        # profile modal still offers the choice later. Never call grant/refusal
+        # unconditionally here.
+        if accepts_marketing:
+            await self.consents.grant(
+                new_user.id, CONSENT_MARKETING, source="registration", ip_address=ip
+            )
 
         return RegistrationResult(user=new_user, reactivation=False)
 
