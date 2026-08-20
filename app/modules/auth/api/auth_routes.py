@@ -47,6 +47,7 @@ from app.modules.auth.application.consents_service import ConsentsService
 from app.modules.auth.infrastructure.authorization_repository import (
     AuthorizationRepository,
 )
+from app.modules.auth.infrastructure.models import CONSENT_MARKETING
 from app.modules.auth.infrastructure.repository import (
     RefreshTokenRepository,
     UserRepository,
@@ -466,6 +467,13 @@ async def delete_me(
             .values(is_active=False)
         )
         await session.execute(stmt)
+    # Revoke marketing consent, if the candidate had an active one. No-op
+    # (does not raise) when there is nothing to revoke. terms_privacy is
+    # deliberately left untouched — it documents legal acceptance at signup,
+    # never revoked by account closure (see design D3/D5).
+    await ConsentsService(session).revoke(
+        current_user.user_id, CONSENT_MARKETING, source="account_close"
+    )
 
 
 # ── Background task registration (durable queue / inline) ─────────────────────
