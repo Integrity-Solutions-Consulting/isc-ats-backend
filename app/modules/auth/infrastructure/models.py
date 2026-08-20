@@ -48,6 +48,40 @@ class RefreshToken(Base, AuditMixin, SoftDeleteMixin):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+# auth.consents consent_type values. Code branches on these constants, never
+# on ad-hoc strings.
+CONSENT_TERMS_PRIVACY = "terms_privacy"
+CONSENT_MARKETING = "marketing"
+
+
+class Consent(Base, AuditMixin, SoftDeleteMixin):
+    """auth.consents — append-only log of a user's consent decisions.
+
+    A row where accepted_at == revoked_at records a REFUSAL (the user was
+    asked and declined) rather than a grant — it still counts as "decided"
+    but never as "currently active". Granting again does NOT update the
+    existing row: it revokes the current active row (if any) and inserts a
+    fresh one, so the full history of grants/revocations/refusals is
+    preserved. A partial unique index (user_id, consent_type) WHERE
+    revoked_at IS NULL enforces at most one active row per user+type.
+    """
+
+    __tablename__ = "consents"
+    __table_args__ = {"schema": "auth"}
+
+    id: Mapped[int] = mapped_column(Identity(), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("auth.users.id", deferrable=True, initially="IMMEDIATE")
+    )
+    consent_type: Mapped[str] = mapped_column(String(32))
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    revoked_source: Mapped[str | None] = mapped_column(String(32), default=None)
+    policy_version: Mapped[str] = mapped_column(String(32))
+    ip_address: Mapped[str | None] = mapped_column(String(IP_LENGTH), default=None)
+    source: Mapped[str] = mapped_column(String(32))
+
+
 class Role(Base, AuditMixin, SoftDeleteMixin):
     """auth.roles — a named bundle of permissions (thin CRUD).
 
