@@ -59,8 +59,9 @@ router = APIRouter(prefix="/applications", tags=["recruitment · applications"])
 
 # Defensive fallback for _notify_rejection: rejection_reason should always be set
 # by the time this task runs (the manual path requires it via 400, the auto-reject
-# path always passes VacancyService.AUTO_REJECT_REASON), but the column is
-# nullable — a legacy/pre-migration row must still render a coherent email.
+# path always passes one of VacancyService's AUTO_REJECT_REASON* constants), but
+# the column is nullable — a legacy/pre-migration row must still render a
+# coherent email.
 _DEFAULT_REJECTION_REASON = (
     "tu perfil no se ajusta a los requerimientos específicos de esta posición."
 )

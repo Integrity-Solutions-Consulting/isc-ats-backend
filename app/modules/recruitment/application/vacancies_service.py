@@ -35,11 +35,17 @@ _PUBLISH_PERMISSION = "recruitment.vacancies.publish"
 # full surface (same dependency-inversion shape as InUseChecker above).
 ApplicationRejector = Callable[[int, str], Awaitable[list[Application]]]
 
-# Fixed system-generated reason shown to the candidate (email + in-app
+# Fixed system-generated reasons shown to the candidate (email + in-app
 # notification) when their application is auto-rejected because the vacancy
-# itself closed or was deleted — as opposed to a manual, HR-written reason.
+# itself closed, was cancelled, or was deleted — as opposed to a manual,
+# HR-written reason. 'closed' implies every opening got filled (the backend
+# refuses that transition otherwise, see _guard_close), so its wording says
+# so; 'cancelled' carries no such guarantee and must not claim one.
 AUTO_REJECT_REASON = (
     "Esta vacante fue cerrada porque ya se cubrieron los recursos solicitados."
+)
+AUTO_REJECT_REASON_CANCELLED = (
+    "Esta vacante fue cancelada y el proceso de selección ha finalizado."
 )
 
 
@@ -185,12 +191,20 @@ class VacancyService:
         changes["ip_updated"] = actor.ip
         updated = await self.repository.update(vacancy, changes)
 
-        # Closing a vacancy auto-rejects every non-hired active application —
-        # HR closed it because the openings it still needed are covered, so
-        # anyone still in progress is no longer in the running for THIS vacancy.
-        closed_now = new_status is not None and new_status.code == "closed"
-        if closed_now and self.application_rejector is not None:
-            rejected = await self.application_rejector(vacancy_id, AUTO_REJECT_REASON)
+        # Closing OR cancelling a vacancy auto-rejects every non-hired active
+        # application — either way HR has decided the vacancy is no longer
+        # taking candidates, so anyone still in progress is no longer in the
+        # running for THIS vacancy. Each transition carries its own reason:
+        # 'closed' truthfully says the openings got covered (guarded by
+        # _guard_close); 'cancelled' must not make that claim.
+        auto_reject_reason: str | None = None
+        if new_status is not None and new_status.code == "closed":
+            auto_reject_reason = AUTO_REJECT_REASON
+        elif new_status is not None and new_status.code == "cancelled":
+            auto_reject_reason = AUTO_REJECT_REASON_CANCELLED
+
+        if auto_reject_reason is not None and self.application_rejector is not None:
+            rejected = await self.application_rejector(vacancy_id, auto_reject_reason)
             self.last_auto_rejected_application_ids = [app.id for app in rejected]
 
         return updated

@@ -29,6 +29,7 @@ from app.modules.recruitment.api.vacancies_schemas import VacancyUpdate
 from app.modules.recruitment.application.applications_service import ApplicationService
 from app.modules.recruitment.application.vacancies_service import (
     AUTO_REJECT_REASON,
+    AUTO_REJECT_REASON_CANCELLED,
     VacancyCloseError,
     VacancyService,
 )
@@ -229,6 +230,29 @@ async def test_cancel_allowed_when_not_filled(session: AsyncSession) -> None:
         vacancy.id, VacancyUpdate(status_id=cancelled.id), ACTOR
     )
     assert updated.status_id == cancelled.id
+
+
+async def test_cancel_auto_rejects_pending_applications_with_its_own_reason(
+    session: AsyncSession,
+) -> None:
+    """Cancelling has no 'openings filled' guarantee — unlike closing — so its
+    auto-reject reason must not claim one. Same fan-out, different wording."""
+    vacancy = await _setup_vacancy(session, openings=2, hired=0)
+    pending = await _add_pending_application(session, vacancy)
+    cancelled = await _status(session, "cancelled")
+
+    await _service(session).update(vacancy.id, VacancyUpdate(status_id=cancelled.id), ACTOR)
+
+    rejected = await ParameterRepository(session).get_by_type_and_code(
+        "application_status", "rejected"
+    )
+    assert rejected is not None
+    refreshed = await session.get(Application, pending.id)
+    assert refreshed is not None
+    assert refreshed.status_id == rejected.id
+    assert refreshed.current_stage_id is None
+    assert refreshed.rejection_reason == AUTO_REJECT_REASON_CANCELLED
+    assert refreshed.rejection_reason != AUTO_REJECT_REASON
 
 
 async def test_pause_allowed_when_not_filled(session: AsyncSession) -> None:
