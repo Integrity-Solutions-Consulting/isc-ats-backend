@@ -33,6 +33,7 @@ CANDIDATE_ROLE_NAME = "candidate"
 TALENTO_HUMANO_ROLE_NAME = "Talento Humano"
 COMERCIAL_ROLE_NAME = "Comercial"
 PROYECTO_ROLE_NAME = "Proyecto"
+MARKETING_ROLE_NAME = "Marketing"
 
 # Exact permission codes the candidate-portal BFF is allowed to call.
 # Verified against the frontend API calls — do not expand without a front-end audit.
@@ -219,6 +220,17 @@ COMERCIAL_PARAMETER_TYPES: frozenset[str] = frozenset(
 
 # Proyecto mirrors Comercial exactly, same rationale as PROYECTO_PERMISSION_CODES.
 PROYECTO_PARAMETER_TYPES: frozenset[str] = COMERCIAL_PARAMETER_TYPES
+
+# Internal staff role — Marketing (marketing-consent Slice 4). Sole purpose: see how
+# many candidates are subscribed to marketing communications and export their
+# contact info. Holds ONLY auth.subscribers.read — no pipeline, no catalogs, no
+# candidate PII beyond what the export itself exposes (name/email/consent date).
+MARKETING_PERMISSION_CODES: frozenset[str] = frozenset({"auth.subscribers.read"})
+
+# Marketing writes no org.parameters catalogs — empty allowlist. grant_parameter_types_to_role
+# fails closed on an empty allowlist (revokes every active grant on the role), so this
+# is the correct way to express "this role owns zero catalogs", not an omission.
+MARKETING_PARAMETER_TYPES: frozenset[str] = frozenset()
 
 
 class BootstrapError(Exception):
@@ -454,6 +466,12 @@ async def bootstrap_admin(session: AsyncSession, email: str, password: str) -> B
             "Project team — delivery-side recruitment",
             PROYECTO_PERMISSION_CODES,
             PROYECTO_PARAMETER_TYPES,
+        ),
+        (
+            MARKETING_ROLE_NAME,
+            "Marketing — subscriber count and export only",
+            MARKETING_PERMISSION_CODES,
+            MARKETING_PARAMETER_TYPES,
         ),
     ]
     for rname, rdesc, rcodes, rparam_types in _internal_roles:

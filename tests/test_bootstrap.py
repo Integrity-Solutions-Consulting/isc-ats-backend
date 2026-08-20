@@ -7,6 +7,9 @@ from app.modules.auth.application.bootstrap_service import (
     ADMIN_ROLE_NAME,
     CANDIDATE_PERMISSION_CODES,
     CANDIDATE_ROLE_NAME,
+    MARKETING_PARAMETER_TYPES,
+    MARKETING_PERMISSION_CODES,
+    MARKETING_ROLE_NAME,
     bootstrap_admin,
 )
 from app.modules.auth.infrastructure.authorization_repository import (
@@ -108,6 +111,37 @@ async def test_bootstrap_creates_candidate_role_with_correct_grants(
         ).scalars().all()
     )
     assert granted_codes == set(CANDIDATE_PERMISSION_CODES)
+
+
+def test_marketing_role_name_and_permission_codes_are_stable() -> None:
+    assert MARKETING_ROLE_NAME == "Marketing"
+    assert MARKETING_PERMISSION_CODES == frozenset({"auth.subscribers.read"})
+    assert MARKETING_PARAMETER_TYPES == frozenset()
+
+
+async def test_bootstrap_creates_marketing_role_with_only_subscribers_read(
+    session: AsyncSession,
+) -> None:
+    await bootstrap_admin(session, f"admin-{uuid.uuid4().hex[:10]}@test.local", "S3cret")
+
+    role = (
+        await session.execute(
+            select(Role).where(Role.name == MARKETING_ROLE_NAME).where(Role.is_active.is_(True))
+        )
+    ).scalar_one_or_none()
+    assert role is not None, "Marketing role must exist after bootstrap"
+
+    granted_codes = set(
+        (
+            await session.execute(
+                select(Permission.code)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(RolePermission.role_id == role.id)
+                .where(RolePermission.is_active.is_(True))
+            )
+        ).scalars().all()
+    )
+    assert granted_codes == set(MARKETING_PERMISSION_CODES)
 
 
 async def test_bootstrap_candidate_role_is_idempotent(session: AsyncSession) -> None:

@@ -8,6 +8,7 @@ from app.modules.auth.api import (
     role_parameter_types_routes,
     role_permissions_routes,
     roles_routes,
+    subscribers_routes,
     user_roles_routes,
     users_routes,
 )
@@ -23,3 +24,4 @@ router.include_router(permissions_routes.router)
 router.include_router(user_roles_routes.router)
 router.include_router(menu_items_routes.router)
 router.include_router(users_routes.router)
+router.include_router(subscribers_routes.router)
