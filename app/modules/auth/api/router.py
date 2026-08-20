@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.modules.auth.api import (
     auth_routes,
+    consents_routes,
     menu_items_routes,
     permissions_routes,
     role_parameter_types_routes,
@@ -14,6 +15,7 @@ from app.modules.auth.api import (
 # Aggregates every resource router inside the auth bounded context.
 router = APIRouter(prefix="/auth")
 router.include_router(auth_routes.router)
+router.include_router(consents_routes.router)
 router.include_router(roles_routes.router)
 router.include_router(role_permissions_routes.router)
 router.include_router(role_parameter_types_routes.router)
