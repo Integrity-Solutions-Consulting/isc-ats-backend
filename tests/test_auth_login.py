@@ -21,6 +21,7 @@ from app.modules.auth.application.bootstrap_service import (
     grant_candidate_permissions_to_role,
     sync_permissions,
 )
+from app.modules.auth.application.consents_service import ConsentsService
 from app.modules.auth.infrastructure.models import Role, User, UserRole
 from app.modules.auth.infrastructure.repository import (
     RefreshTokenRepository,
@@ -34,6 +35,7 @@ def _service(session: AsyncSession) -> AuthService:
         UserRepository(session),
         RefreshTokenRepository(session),
         ParameterRepository(session),
+        ConsentsService(session),
     )
 
 
@@ -44,6 +46,7 @@ def _service_with_throttle(
         UserRepository(session),
         RefreshTokenRepository(session),
         ParameterRepository(session),
+        ConsentsService(session),
         login_throttle=throttle,
     )
 
@@ -326,6 +329,7 @@ async def test_refresh_reuse_revokes_family(session: AsyncSession) -> None:
         UserRepository(session),
         RefreshTokenRepository(session),
         ParameterRepository(session),
+        ConsentsService(session),
         token_denylist=denylist,
     )
 

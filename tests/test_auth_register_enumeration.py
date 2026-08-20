@@ -48,7 +48,7 @@ async def test_new_and_existing_email_are_indistinguishable(
     client: AsyncClient, session: AsyncSession
 ) -> None:
     email = f"enum-{uuid.uuid4().hex[:12]}@test.example.com"
-    body = {"email": email, "password": _PASSWORD}
+    body = {"email": email, "password": _PASSWORD, "accepts_terms": True}
 
     first = await client.post("/api/v1/auth/register", json=body)
     second = await client.post("/api/v1/auth/register", json=body)
@@ -95,7 +95,8 @@ async def test_reregister_inactive_email_is_indistinguishable(
     await session.flush()
 
     response = await client.post(
-        "/api/v1/auth/register", json={"email": email, "password": _PASSWORD}
+        "/api/v1/auth/register",
+        json={"email": email, "password": _PASSWORD, "accepts_terms": True},
     )
 
     # Generic success response, and NO second user row for this email.

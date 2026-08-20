@@ -14,6 +14,7 @@ from app.modules.auth.application.bootstrap_service import (
     grant_candidate_permissions_to_role,
     sync_permissions,
 )
+from app.modules.auth.application.consents_service import ConsentsService
 from app.modules.auth.application.turnstile import TurnstileOutcome
 from app.modules.auth.infrastructure.models import Role, User
 from app.modules.auth.infrastructure.repository import (
@@ -42,6 +43,7 @@ def _service(session: AsyncSession, turnstile: _FakeTurnstile) -> AuthService:
         UserRepository(session),
         RefreshTokenRepository(session),
         ParameterRepository(session),
+        ConsentsService(session),
         turnstile=turnstile,
     )
 

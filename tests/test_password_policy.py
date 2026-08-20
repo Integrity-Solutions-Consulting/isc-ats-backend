@@ -53,11 +53,11 @@ def test_policy_rejects_below_minimum_length() -> None:
 
 def test_register_schema_rejects_weak_password() -> None:
     with pytest.raises(ValidationError):
-        RegisterRequest(email="a@b.com", password="password123")
+        RegisterRequest(email="a@b.com", password="password123", accepts_terms=True)
 
 
 def test_register_schema_accepts_strong_password() -> None:
-    model = RegisterRequest(email="a@b.com", password=_STRONG)
+    model = RegisterRequest(email="a@b.com", password=_STRONG, accepts_terms=True)
     assert model.password == _STRONG
 
 
