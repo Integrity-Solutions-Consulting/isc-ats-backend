@@ -220,3 +220,113 @@ async def test_pipeline_endpoint_serializes_undeclared_salary_as_null(
     assert cards[str(declared_zero.id)]["salaryExpectation"] == 0
     assert cards[str(declared_zero.id)]["city"] is None
     assert cards[str(declared_zero.id)]["isStudying"] is False
+
+
+# ── years_of_experience — Candidate profile field surfaced on the card ─────────
+#
+# Unlike salary_expectation (an application-time field), years_of_experience
+# lives on the candidate row. Same undeclared-vs-zero hazard applies: the board
+# will filter by "minimum years of experience," and folding None into 0 would
+# make an undeclared candidate satisfy any minimum starting at 0.
+
+
+async def test_pipeline_card_surfaces_decimal_years_of_experience(
+    session: AsyncSession,
+) -> None:
+    """A decimal value like 1.5 must not be truncated to an int on the way out."""
+    param, city, vacancy, stage = await _graph(session)
+    candidate = await _candidate(session, city_id=city.id, is_studying=False)
+    candidate.years_of_experience = Decimal("1.5")
+    await BaseRepository(session, Application).add(
+        Application(
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=param.id,
+            current_stage_id=stage.id,
+        )
+    )
+    await session.flush()
+
+    data = await PipelineRepository(session).get_pipeline(vacancy.id)
+
+    assert len(data.cards) == 1
+    assert data.cards[0].years_of_experience == Decimal("1.5")
+
+
+async def test_undeclared_years_of_experience_is_none_and_declared_zero_is_zero(
+    session: AsyncSession,
+) -> None:
+    param, city, vacancy, stage = await _graph(session)
+    undeclared = await _candidate(session, city_id=city.id, is_studying=False)
+    declared_zero = await _candidate(session, city_id=city.id, is_studying=False)
+    declared_zero.years_of_experience = Decimal("0")
+    for candidate in (undeclared, declared_zero):
+        await BaseRepository(session, Application).add(
+            Application(
+                vacancy_id=vacancy.id,
+                candidate_id=candidate.id,
+                status_id=param.id,
+                current_stage_id=stage.id,
+            )
+        )
+    await session.flush()
+
+    data = await PipelineRepository(session).get_pipeline(vacancy.id)
+    by_candidate = {c.candidate_id: c.years_of_experience for c in data.cards}
+
+    assert by_candidate[undeclared.id] is None
+    assert by_candidate[declared_zero.id] == Decimal("0")
+
+
+async def test_pipeline_endpoint_serializes_undeclared_years_of_experience_as_null(
+    session: AsyncSession,
+) -> None:
+    """End-to-end: the route must not fold an undeclared years_of_experience into 0.
+
+    The repository can return None and the JSON still say 0 if the mapping uses a
+    truthiness check — which is exactly what bit salaryExpectation before.
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    from app.core.database import get_session
+    from app.core.security import create_access_token
+    from app.main import app
+    from app.modules.auth.application.bootstrap_service import bootstrap_admin
+
+    param, city, vacancy, stage = await _graph(session)
+    undeclared = await _candidate(session, city_id=city.id, is_studying=True)
+    declared_zero = await _candidate(session, city_id=None, is_studying=False)
+    declared_zero.years_of_experience = Decimal("0")
+    for candidate in (undeclared, declared_zero):
+        await BaseRepository(session, Application).add(
+            Application(
+                vacancy_id=vacancy.id,
+                candidate_id=candidate.id,
+                status_id=param.id,
+                current_stage_id=stage.id,
+            )
+        )
+    await session.flush()
+
+    admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
+    token = create_access_token(admin.user_id, extra_claims={"portal": "staff"})
+
+    async def _use_test_session():
+        yield session
+
+    app.dependency_overrides[get_session] = _use_test_session
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                f"/api/v1/recruitment/vacancies/{vacancy.id}/pipeline",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert response.status_code == 200, response.text
+    finally:
+        app.dependency_overrides.clear()
+
+    cards = {c["candidateId"]: c for c in response.json()["cards"]}
+
+    assert cards[str(undeclared.id)]["yearsOfExperience"] is None
+    assert cards[str(declared_zero.id)]["yearsOfExperience"] == 0

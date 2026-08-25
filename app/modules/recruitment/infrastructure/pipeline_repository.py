@@ -38,6 +38,7 @@ class CardRow:
     city: str | None
     is_studying: bool
     salary_expectation: float | None
+    years_of_experience: float | None
     match_score: float | None
     updated_at: str | None
     created_at: str
@@ -118,6 +119,7 @@ class PipelineRepository:
                 CityParam.name.label("city"),
                 Candidate.is_studying,
                 Application.salary_expectation,
+                Candidate.years_of_experience,
                 Application.match_score,
                 Application.updated_at,
                 Application.created_at,
