@@ -292,6 +292,13 @@ async def create_application(
     task_queue: TaskQueueDep,
 ) -> ApplicationRead:
     await _require_candidate_owner(session, current_user, data.candidate_id)
+    if is_candidate_portal(current_user):
+        candidate = await BaseRepository(session, Candidate).get(data.candidate_id)
+        if candidate is not None and candidate.years_of_experience is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Debes completar tus años de experiencia en tu perfil antes de postular.",
+            )
     try:
         created = await service.create(data, current_user)
     except ApplicationReferenceError as exc:

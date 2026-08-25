@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -100,6 +101,7 @@ class CandidateBase(BaseModel):
     is_studying: bool = False
     is_working: bool = False
     current_company: str | None = Field(default=None, max_length=200)
+    years_of_experience: Decimal | None = Field(default=None, ge=0, le=99.9)
     cv_file_id: int | None = None
 
 
@@ -124,6 +126,7 @@ class CandidateUpdate(_CandidateInputValidators):
     is_studying: bool | None = None
     is_working: bool | None = None
     current_company: str | None = Field(default=None, max_length=200)
+    years_of_experience: Decimal | None = Field(default=None, ge=0, le=99.9)
     cv_file_id: int | None = None
 
 
@@ -177,6 +180,7 @@ class CandidateExpandedRead(BaseModel):
     is_studying: bool
     is_working: bool
     current_company: str | None
+    years_of_experience: Decimal | None
     cv_file_id: int | None
     avatar_file_id: int | None
     is_active: bool
