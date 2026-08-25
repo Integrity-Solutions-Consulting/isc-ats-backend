@@ -107,6 +107,14 @@ PERMISSION_CATALOG: tuple[PermissionSpec, ...] = (
     *_specs("ai", "cv_parse_jobs", "CV parse jobs", _CRUD),
     *_specs("ai", "vacancy_promo_images", "vacancy promo images", ("read", "create", "delete")),
     *_specs("ai", "ai_usage_logs", "AI usage logs", ("read", "create")),
+    # auth bounded context — Marketing role (marketing-consent Slice 4). Narrow
+    # read-only permission gating the subscriber count + Excel export; the
+    # Marketing role holds ONLY this code (see bootstrap_service.py).
+    PermissionSpec(
+        code="auth.subscribers.read",
+        name="View marketing subscribers",
+        module="auth",
+    ),
 )
 
 ALL_CODES: frozenset[str] = frozenset(spec.code for spec in PERMISSION_CATALOG)

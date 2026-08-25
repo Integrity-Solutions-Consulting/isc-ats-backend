@@ -153,6 +153,10 @@ class PipelineCardSchema(BaseModel):
     # declared 0. Collapsing both into 0 makes undeclared applicants match any
     # salary range starting at 0, which silently corrupts the board filter.
     salaryExpectation: int | None = None
+    # None means "the candidate never declared their experience" — distinct from a
+    # declared 0. Collapsing both into 0 would make undeclared candidates satisfy
+    # any minimum starting at 0, which silently corrupts the board filter.
+    yearsOfExperience: float | None = None
     updatedAt: str
 
 

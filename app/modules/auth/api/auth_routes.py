@@ -43,9 +43,11 @@ from app.modules.auth.application.auth_service import (
     SamePasswordError,
     TurnstileError,
 )
+from app.modules.auth.application.consents_service import ConsentsService
 from app.modules.auth.infrastructure.authorization_repository import (
     AuthorizationRepository,
 )
+from app.modules.auth.infrastructure.models import CONSENT_MARKETING
 from app.modules.auth.infrastructure.repository import (
     RefreshTokenRepository,
     UserRepository,
@@ -202,6 +204,7 @@ def get_service(session: SessionDep, request: Request) -> AuthService:
         users=UserRepository(session),
         refresh_tokens=RefreshTokenRepository(session),
         parameters=ParameterRepository(session),
+        consents=ConsentsService(session),
         has_profile_checker=candidate_has_profile,
         token_denylist=request.app.state.token_denylist,
         login_throttle=request.app.state.login_throttle,
@@ -294,6 +297,8 @@ async def register(
             data.password,
             _client_ip(request),
             turnstile_token=data.turnstile_token,
+            accepts_terms=data.accepts_terms,
+            accepts_marketing=data.accepts_marketing,
         )
     except TurnstileError as exc:
         # A CAPTCHA failure is independent of whether the email exists, so it's
@@ -462,6 +467,13 @@ async def delete_me(
             .values(is_active=False)
         )
         await session.execute(stmt)
+    # Revoke marketing consent, if the candidate had an active one. No-op
+    # (does not raise) when there is nothing to revoke. terms_privacy is
+    # deliberately left untouched — it documents legal acceptance at signup,
+    # never revoked by account closure (see design D3/D5).
+    await ConsentsService(session).revoke(
+        current_user.user_id, CONSENT_MARKETING, source="account_close"
+    )
 
 
 # ── Background task registration (durable queue / inline) ─────────────────────

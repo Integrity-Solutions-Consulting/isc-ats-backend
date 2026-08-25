@@ -18,6 +18,17 @@ def _reject_disposable_email(value: str) -> str:
     return value
 
 
+def _require_terms_acceptance(value: bool) -> bool:
+    # Terms + privacy-policy acceptance is mandatory to register (marketing-consent
+    # R1). Unlike the marketing flag, this one cannot be False past this point.
+    if not value:
+        raise ValueError(
+            "Debes aceptar los Términos y Condiciones y la Política de Privacidad "
+            "para registrarte."
+        )
+    return value
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=72)
@@ -51,9 +62,17 @@ class RegisterRequest(BaseModel):
     # Cloudflare Turnstile token from the widget. Optional so the field is inert
     # when the gate is disabled; verified server-side (fail-closed) when enabled.
     turnstile_token: str | None = None
+    # Mandatory: the "Crea tu cuenta" checkbox is required client-side, and this
+    # validator enforces it server-side too (marketing-consent R1). No default —
+    # a client that forgets to send it must fail loudly, not silently pass.
+    accepts_terms: bool
+    # Optional, defaults to False ("not decided yet"). See design D3: an
+    # unchecked box must never be recorded as a refusal.
+    accepts_marketing: bool = False
 
     _validate_password = field_validator("password")(_enforce_password_policy)
     _validate_email = field_validator("email")(_reject_disposable_email)
+    _validate_terms = field_validator("accepts_terms")(_require_terms_acceptance)
 
 
 class ChangePasswordRequest(BaseModel):

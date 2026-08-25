@@ -2,11 +2,13 @@ from fastapi import APIRouter
 
 from app.modules.auth.api import (
     auth_routes,
+    consents_routes,
     menu_items_routes,
     permissions_routes,
     role_parameter_types_routes,
     role_permissions_routes,
     roles_routes,
+    subscribers_routes,
     user_roles_routes,
     users_routes,
 )
@@ -14,6 +16,7 @@ from app.modules.auth.api import (
 # Aggregates every resource router inside the auth bounded context.
 router = APIRouter(prefix="/auth")
 router.include_router(auth_routes.router)
+router.include_router(consents_routes.router)
 router.include_router(roles_routes.router)
 router.include_router(role_permissions_routes.router)
 router.include_router(role_parameter_types_routes.router)
@@ -21,3 +24,4 @@ router.include_router(permissions_routes.router)
 router.include_router(user_roles_routes.router)
 router.include_router(menu_items_routes.router)
 router.include_router(users_routes.router)
+router.include_router(subscribers_routes.router)

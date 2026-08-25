@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,7 @@ class CandidateExpanded:
     is_studying: bool
     is_working: bool
     current_company: str | None
+    years_of_experience: Decimal | None
     cv_file_id: int | None
     avatar_file_id: int | None
     is_active: bool
@@ -72,6 +74,7 @@ class CandidatesExpandedRepository:
                 Candidate.is_studying,
                 Candidate.is_working,
                 Candidate.current_company,
+                Candidate.years_of_experience,
                 Candidate.cv_file_id,
                 Candidate.avatar_file_id,
                 Candidate.is_active,

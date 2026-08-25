@@ -159,6 +159,33 @@ async def test_grant_parameter_types_to_role_idempotent_reapply(session: AsyncSe
     assert grants[0].is_active is True
 
 
+async def test_grant_parameter_types_to_role_empty_allowlist_fails_closed(
+    session: AsyncSession,
+) -> None:
+    """An empty allowlist (e.g. the Marketing role, Slice 4) revokes every active
+    grant on the role rather than leaving previously-granted types in place."""
+    from app.modules.auth.application.bootstrap_service import (  # noqa: PLC0415
+        grant_parameter_types_to_role,
+    )
+
+    role = Role(name=f"TestParamEmpty-{uuid.uuid4().hex[:8]}", description="test")
+    session.add(role)
+    await session.flush()
+
+    await grant_parameter_types_to_role(session, role.id, {"vacancy_name", "stage"})
+    count = await grant_parameter_types_to_role(session, role.id, set())
+
+    assert count == 0
+    active_grants = (
+        await session.execute(
+            select(RoleParameterTypeGrant)
+            .where(RoleParameterTypeGrant.role_id == role.id)
+            .where(RoleParameterTypeGrant.is_active.is_(True))
+        )
+    ).scalars().all()
+    assert active_grants == []
+
+
 async def test_list_parameter_types_for_user_reflects_role_grants(
     session: AsyncSession,
 ) -> None:

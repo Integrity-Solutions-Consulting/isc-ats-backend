@@ -76,7 +76,7 @@ async def test_register_rejects_disposable_email(
 ) -> None:
     res = await client.post(
         "/api/v1/auth/register",
-        json={"email": "spam@yopmail.com", "password": _PASSWORD},
+        json={"email": "spam@yopmail.com", "password": _PASSWORD, "accepts_terms": True},
     )
     assert res.status_code == 422
 
@@ -86,6 +86,7 @@ async def test_register_accepts_real_email(
 ) -> None:
     email = f"real-{uuid.uuid4().hex[:12]}@test.example.com"
     res = await client.post(
-        "/api/v1/auth/register", json={"email": email, "password": _PASSWORD}
+        "/api/v1/auth/register",
+        json={"email": email, "password": _PASSWORD, "accepts_terms": True},
     )
     assert res.status_code == 201

@@ -617,6 +617,11 @@ async def get_vacancy_pipeline(
             salaryExpectation=(
                 int(c.salary_expectation) if c.salary_expectation is not None else None
             ),
+            # `is not None` — not a truthiness check: a declared 0 years of
+            # experience is a real answer and must not be reported as "undeclared".
+            yearsOfExperience=(
+                float(c.years_of_experience) if c.years_of_experience is not None else None
+            ),
             updatedAt=(c.updated_at.isoformat() if c.updated_at else c.created_at.isoformat()),
         )
         for c in data.cards
