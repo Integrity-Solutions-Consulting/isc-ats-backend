@@ -9,7 +9,7 @@ from app.modules.auth.infrastructure.models import Consent
 
 # Bump together with the frontend's LegalDocument.version (src/features/legal/
 # content.ts) — see design D4. Both must agree on the current policy version.
-CURRENT_POLICY_VERSION = "1.0"
+CURRENT_POLICY_VERSION = "2.0"
 
 
 class ConsentsService:
