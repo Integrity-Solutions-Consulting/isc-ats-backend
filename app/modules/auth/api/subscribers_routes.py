@@ -11,6 +11,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 
 from app.core.dependencies import SessionDep
 from app.modules.auth.api.authorization import require_permission
@@ -43,10 +45,25 @@ async def export_subscribers(session: SessionDep) -> StreamingResponse:
     workbook = Workbook()
     sheet = workbook.active
     sheet.append(_HEADER)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    sheet.freeze_panes = "A2"
+
     for row in rows:
         sheet.append(
             [row.first_name, row.last_name, row.email, _naive(row.accepted_at)]
         )
+    for cell in sheet["D"][1:]:
+        cell.number_format = "DD/MM/YYYY HH:MM"
+
+    widths = [len(h) for h in _HEADER]
+    for row in rows:
+        widths[0] = max(widths[0], len(row.first_name))
+        widths[1] = max(widths[1], len(row.last_name))
+        widths[2] = max(widths[2], len(row.email))
+    widths[3] = max(widths[3], len("DD/MM/YYYY HH:MM"))
+    for i, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(i)].width = width + 4
 
     buffer = io.BytesIO()
     workbook.save(buffer)
