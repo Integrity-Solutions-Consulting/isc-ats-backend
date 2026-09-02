@@ -31,17 +31,22 @@ async def client(session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 
 class _NoOpTaskQueue:
-    """Swallows enqueued tasks so registration never triggers real SMTP here."""
+    """Records enqueued task names and swallows them (no real SMTP here)."""
+
+    def __init__(self) -> None:
+        self.enqueued: list[str] = []
 
     async def enqueue(self, task_name: str, *args: object) -> None:
-        return None
+        self.enqueued.append(task_name)
 
 
 @pytest.fixture(autouse=True)
-def _stub_task_queue() -> None:
-    # Overrides conftest's awaiting queue: this test only cares about the response
-    # parity, not the email side effect.
-    app.state.task_queue = _NoOpTaskQueue()
+def task_queue() -> _NoOpTaskQueue:
+    # Overrides conftest's awaiting queue: these tests care about the response
+    # parity and about WHICH email is sent, never about real delivery.
+    queue = _NoOpTaskQueue()
+    app.state.task_queue = queue
+    return queue
 
 
 async def test_new_and_existing_email_are_indistinguishable(
@@ -108,3 +113,43 @@ async def test_reregister_inactive_email_is_indistinguishable(
         )
     ).scalar_one()
     assert count == 1
+
+
+async def test_reregister_unverified_email_sends_verification_not_account_exists(
+    client: AsyncClient, session: AsyncSession, task_queue: _NoOpTaskQueue
+) -> None:
+    """An unverified account re-registering must get a FRESH verification link.
+
+    Before this branch existed the route sent `send_account_exists_email`, whose only
+    call to action is "log in" — which is exactly what an unverified account cannot do.
+    The response stays byte-identical to every other branch (anti-enumeration); only
+    the email that reaches the real inbox changes.
+    """
+    from app.core.security import hash_password
+    from app.modules.auth.infrastructure.models import User as UserModel
+    from app.modules.org.infrastructure.parameters_repository import ParameterRepository
+
+    portal = await ParameterRepository(session).get_by_type_and_code(
+        "user_portal", "candidate"
+    )
+    assert portal is not None
+    email = f"unverified-{uuid.uuid4().hex[:12]}@test.example.com"
+    session.add(
+        UserModel(
+            email=email,
+            password_hash=hash_password(_PASSWORD),
+            portal_id=portal.id,
+            email_verified=False,
+            is_active=True,
+        )
+    )
+    await session.flush()
+
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": _PASSWORD, "accepts_terms": True},
+    )
+
+    assert response.status_code == 201
+    assert "ya está registrado" not in response.text
+    assert task_queue.enqueued == ["send_verification_email"]

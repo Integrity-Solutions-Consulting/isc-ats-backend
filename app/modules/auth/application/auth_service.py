@@ -79,10 +79,16 @@ class RegistrationResult:
     `reactivation` is True when the email belonged to a deactivated candidate who
     is coming back: the caller sends a reactivation email instead of a first-time
     verification email. The account stays off until the link is clicked.
+
+    `pending_verification` is True when the email belonged to an account that was
+    registered but never verified: the caller sends a fresh verification email over
+    the existing row. Both flags False means a brand-new account was created. They
+    are never both True.
     """
 
     user: "User"
     reactivation: bool
+    pending_verification: bool = False
 
 
 class AccountLockedError(AuthError):
@@ -306,9 +312,10 @@ class AuthService:
         await self._check_turnstile(turnstile_token, ip, fail_closed=True)
 
         # Look up by normalized email across ALL rows (get_by_email filters
-        # is_active==True and would miss a deactivated account). An active row is a
-        # real conflict; an inactive CANDIDATE row is a returning user, handled as
-        # a reactivation instead of a hard block.
+        # is_active==True and would miss a deactivated account). An active VERIFIED
+        # row is a real conflict; an inactive CANDIDATE row is a returning user
+        # (reactivation) and an active UNVERIFIED row is someone who never finished
+        # signing up (fresh verification link) — neither is a hard block.
         normalized_email = email.strip().lower()
         existing_stmt = select(User).where(func.lower(User.email) == normalized_email)
         existing_user = (
@@ -338,6 +345,25 @@ class AuthService:
                     ip_address=ip,
                 )
                 return RegistrationResult(user=existing_user, reactivation=True)
+            if not existing_user.email_verified and existing_user.portal_id == portal.id:
+                # Registered but never verified. The original token expired after 24h
+                # (create_verification_token), so telling this person "you already have
+                # an account, log in" strands them: login rejects unverified accounts.
+                # Send a fresh link over the same row instead. Gated on the candidate
+                # portal (like reactivation above) so this endpoint can never mint a
+                # verification link for a staff account; those fall through to the
+                # already-exists branch.
+                #
+                # The password hash is deliberately LEFT ALONE. Nobody has proven
+                # ownership of this inbox yet, so letting a re-registration overwrite
+                # it would let a stranger set the credentials of an account whose real
+                # owner might still click the link. The owner keeps the password from
+                # their first registration, or recovers it via forgot-password once
+                # verified. Consent is untouched too: the original registration already
+                # granted terms/privacy and nothing revoked it.
+                return RegistrationResult(
+                    user=existing_user, reactivation=False, pending_verification=True
+                )
             raise EmailAlreadyExistsError("El correo electrónico ya está registrado")
 
         hashed = hash_password(password)
