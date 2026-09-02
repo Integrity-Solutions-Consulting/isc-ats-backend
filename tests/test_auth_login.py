@@ -255,7 +255,7 @@ async def test_register_candidate_reactivates_inactive_candidate(
 async def test_register_candidate_rejects_email_of_active_user(
     session: AsyncSession,
 ) -> None:
-    """An email held by an ACTIVE account is a real conflict and must be rejected."""
+    """An email held by an ACTIVE VERIFIED account is a real conflict and must be rejected."""
     from app.modules.auth.application.auth_service import EmailAlreadyExistsError
 
     await _bootstrap_candidate_role(session)
@@ -275,6 +275,46 @@ async def test_register_candidate_rejects_email_of_active_user(
 
     with pytest.raises(EmailAlreadyExistsError):
         await _service(session).register_candidate(email, "Pass1234!", "127.0.0.1")
+
+
+async def test_register_candidate_resends_verification_for_unverified_account(
+    session: AsyncSession,
+) -> None:
+    """Re-registering an ACTIVE but UNVERIFIED email must offer a fresh link, not a block.
+
+    The verification token expires in 24h. Someone who registered, never clicked and
+    came back later would otherwise be told "you already have an account, log in" —
+    and login rejects them for being unverified. A dead end. This branch answers with
+    a new verification email instead, reusing the same row.
+    """
+    await _bootstrap_candidate_role(session)
+    portal = await ParameterRepository(session).get_by_type_and_code(
+        "user_portal", "candidate"
+    )
+    assert portal is not None
+    email = f"unverified-{uuid.uuid4().hex[:10]}@test.local"
+    old_hash = hash_password("OldPass1234!")
+    pending = User(
+        email=email,
+        password_hash=old_hash,
+        portal_id=portal.id,
+        email_verified=False,
+        is_active=True,
+    )
+    await UserRepository(session).add(pending)
+
+    result = await _service(session).register_candidate(email, "NewPass1234!", "127.0.0.1")
+
+    assert result.pending_verification is True
+    assert result.reactivation is False, "the account was never deactivated"
+    assert result.user.id == pending.id, "must reuse the same row, not create a new one"
+    assert result.user.email_verified is False, "still unverified until the link is clicked"
+    # The password is deliberately NOT refreshed here: nobody has proven ownership
+    # of this inbox yet, so letting a re-registration overwrite the hash would let a
+    # stranger set the credentials of an account whose real owner may still click the
+    # link. The owner keeps their original password (or uses forgot-password, which
+    # unlocks once verified).
+    assert result.user.password_hash == old_hash, "password must NOT be overwritten"
 
 
 # ---------------------------------------------------------------------------

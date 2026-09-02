@@ -289,8 +289,11 @@ async def register(
 ):
     # Generic response in ALL branches so the API never reveals whether an email
     # is already registered (anti-enumeration). New account → verification email;
-    # returning (deactivated) candidate → reactivation email; active account →
-    # a "you already have an account" email to the real owner.
+    # registered-but-never-verified candidate → a FRESH verification email (the
+    # first link expires in 24h, and "log in" is useless advice to an account login
+    # rejects as unverified); returning (deactivated) candidate → reactivation
+    # email; active verified account → a "you already have an account" email to the
+    # real owner. Only the email differs — never the response.
     try:
         result = await service.register_candidate(
             data.email,
