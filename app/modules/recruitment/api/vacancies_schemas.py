@@ -148,6 +148,7 @@ class PipelineCardSchema(BaseModel):
     matchStatus: Literal["analyzing", "done"] = "analyzing"
     stageStatus: str = "pending_review"
     city: str | None = None
+    university: str | None = None
     isStudying: bool = False
     # None means "the candidate never declared an expectation" — distinct from a
     # declared 0. Collapsing both into 0 makes undeclared applicants match any
