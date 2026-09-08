@@ -330,3 +330,114 @@ async def test_pipeline_endpoint_serializes_undeclared_years_of_experience_as_nu
 
     assert cards[str(undeclared.id)]["yearsOfExperience"] is None
     assert cards[str(declared_zero.id)]["yearsOfExperience"] == 0
+
+
+# ── university — Candidate profile field surfaced on the card ─────────────────
+#
+# Same shape as city: a nullable FK into org.parameters. Two hazards worth
+# guarding. First, an inner join would drop every applicant who never declared a
+# university. Second, city and university resolve through the same parameters
+# table, so a mixed-up alias would silently serve the city name as the
+# university — the assertions below use distinct names to catch that.
+
+
+async def _university(session: AsyncSession, name: str) -> Parameter:
+    return await BaseRepository(session, Parameter).add(
+        Parameter(type="university", code=uuid.uuid4().hex[:8], name=name)
+    )
+
+
+async def test_pipeline_card_surfaces_university(session: AsyncSession) -> None:
+    param, city, vacancy, stage = await _graph(session)
+    university = await _university(session, "ESPOL")
+    candidate = await _candidate(session, city_id=city.id, is_studying=False)
+    candidate.university_id = university.id
+    await BaseRepository(session, Application).add(
+        Application(
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=param.id,
+            current_stage_id=stage.id,
+        )
+    )
+    await session.flush()
+
+    data = await PipelineRepository(session).get_pipeline(vacancy.id)
+
+    assert len(data.cards) == 1
+    # City is "Guayaquil" — proving the aliased joins did not cross over.
+    assert data.cards[0].university == "ESPOL"
+    assert data.cards[0].city == "Guayaquil"
+
+
+async def test_candidate_without_university_still_appears_on_the_board(
+    session: AsyncSession,
+) -> None:
+    """candidates.university_id is nullable — an inner join would drop these
+    applicants from the Kanban entirely, which is far worse than an
+    unfilterable card."""
+    param, city, vacancy, stage = await _graph(session)
+    candidate = await _candidate(session, city_id=city.id, is_studying=False)
+    await BaseRepository(session, Application).add(
+        Application(
+            vacancy_id=vacancy.id,
+            candidate_id=candidate.id,
+            status_id=param.id,
+            current_stage_id=stage.id,
+        )
+    )
+    await session.flush()
+
+    data = await PipelineRepository(session).get_pipeline(vacancy.id)
+
+    assert len(data.cards) == 1
+    assert data.cards[0].university is None
+
+
+async def test_pipeline_endpoint_serializes_university(session: AsyncSession) -> None:
+    """End-to-end: the board filters on this field, so it must reach the JSON."""
+    from httpx import ASGITransport, AsyncClient
+
+    from app.core.database import get_session
+    from app.core.security import create_access_token
+    from app.main import app
+    from app.modules.auth.application.bootstrap_service import bootstrap_admin
+
+    param, city, vacancy, stage = await _graph(session)
+    university = await _university(session, "Universidad de Cuenca")
+    declared = await _candidate(session, city_id=city.id, is_studying=False)
+    declared.university_id = university.id
+    undeclared = await _candidate(session, city_id=None, is_studying=False)
+    for candidate in (declared, undeclared):
+        await BaseRepository(session, Application).add(
+            Application(
+                vacancy_id=vacancy.id,
+                candidate_id=candidate.id,
+                status_id=param.id,
+                current_stage_id=stage.id,
+            )
+        )
+    await session.flush()
+
+    admin = await bootstrap_admin(session, f"{uuid.uuid4().hex[:12]}@test.local", "S3cret")
+    token = create_access_token(admin.user_id, extra_claims={"portal": "staff"})
+
+    async def _use_test_session():
+        yield session
+
+    app.dependency_overrides[get_session] = _use_test_session
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                f"/api/v1/recruitment/vacancies/{vacancy.id}/pipeline",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert response.status_code == 200, response.text
+    finally:
+        app.dependency_overrides.clear()
+
+    cards = {c["candidateId"]: c for c in response.json()["cards"]}
+
+    assert cards[str(declared.id)]["university"] == "Universidad de Cuenca"
+    assert cards[str(undeclared.id)]["university"] is None

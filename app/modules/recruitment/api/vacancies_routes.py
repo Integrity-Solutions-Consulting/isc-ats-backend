@@ -611,6 +611,7 @@ async def get_vacancy_pipeline(
             matchStatus="done" if c.match_score else "analyzing",
             stageStatus="pending_review",
             city=c.city,
+            university=c.university,
             isStudying=c.is_studying,
             # `is not None` — not a truthiness check: a declared expectation of 0
             # is a real answer and must not be reported as "undeclared".
