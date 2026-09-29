@@ -85,6 +85,40 @@ _PROMPT_HEADER = (
     "Estructura exacta a devolver:\n"
 )
 
+_FOCUSED_SCHEMA = """{
+  "experience": [{
+    "company": "empresa",
+    "role": "cargo",
+    "start_date": "inicio visible",
+    "end_date": "fin visible o Actualidad",
+    "functions": ["responsabilidad visible"],
+    "tools": ["tecnología visible"]
+  }],
+  "certifications": [{
+    "institution": "institución",
+    "name": "curso o certificación",
+    "start": "inicio visible",
+    "end": "fin visible"
+  }],
+  "projects": [{
+    "name": "nombre exacto del proyecto",
+    "description": "descripción fiel, sin inventar ni resumir demasiado",
+    "tools": ["herramienta visible"]
+  }]
+}"""
+
+_FOCUSED_PROMPT = (
+    "Eres un extractor de CV. Analiza el documento completo, incluyendo su diseño visual. "
+    "Extrae únicamente información visible y devuelve SOLO JSON.\n"
+    "No confundas proyectos personales con experiencia laboral.\n"
+    "Busca explícitamente secciones tituladas EXPERIENCIA, EXPERIENCIA LABORAL, "
+    "HISTORIAL PROFESIONAL, CERTIFICACIONES, CURSOS y PROYECTOS.\n"
+    "Incluye cada empleo, cada certificación y cada proyecto; no omitas elementos "
+    "porque estén en otra columna o en otra página. Si una sección no existe, devuelve [].\n"
+    "Conserva los nombres y textos del CV; no inventes fechas, empresas ni funciones.\n"
+    "Estructura exacta:\n"
+)
+
 
 def _normalise_parsed_data(raw: dict[str, Any]) -> dict[str, Any]:
     """Accept common model variants while keeping one generator contract."""
@@ -167,6 +201,29 @@ def _build_image_contents(images: list[bytes]) -> list[Any]:
     return parts
 
 
+def _build_hybrid_contents(cv_text: str, images: list[bytes]) -> list[Any]:
+    """Give the model both reading order and visual layout for column-based CVs."""
+    parts: list[Any] = [
+        _PROMPT_HEADER
+        + _JSON_SCHEMA
+        + f"\n\n## Texto extraído (puede tener columnas desordenadas)\n<CV>\n{cv_text[:14000]}\n</CV>\n"
+        + "\n## Imágenes originales de las páginas\n"
+    ]
+    parts.extend(types.Part.from_bytes(data=image, mime_type="image/png") for image in images)
+    return parts
+
+
+def _build_focused_contents(cv_text: str, images: list[bytes]) -> list[Any]:
+    parts: list[Any] = [
+        _FOCUSED_PROMPT
+        + _FOCUSED_SCHEMA
+        + f"\n\n## Texto del CV\n<CV>\n{cv_text[:18000]}\n</CV>\n"
+        + "\n## Vista visual del CV\n"
+    ]
+    parts.extend(types.Part.from_bytes(data=image, mime_type="image/png") for image in images)
+    return parts
+
+
 def _call_gemini(contents: list[Any]) -> dict:
     client = genai.Client(api_key=settings.gemini_api_key)
     last_exc: Exception | None = None
@@ -186,6 +243,31 @@ def _call_gemini(contents: list[Any]) -> dict:
             if not retryable:
                 break
     raise RuntimeError(f"All models failed. Last error: {last_exc}") from last_exc
+
+
+def _merge_parsed_data(primary: dict[str, Any], focused: dict[str, Any]) -> dict[str, Any]:
+    """Prefer the focused pass for sections most often lost in columns."""
+    first = _normalise_parsed_data(primary)
+    second = _normalise_parsed_data(focused)
+    merged = dict(first)
+    for key in ("experience", "certifications", "projects"):
+        if second.get(key):
+            merged[key] = second[key]
+    for key in ("skills", "tools", "soft_skills"):
+        values = list(first.get(key, [])) + list(second.get(key, []))
+        merged[key] = list(dict.fromkeys(v for v in values if v))
+    return merged
+
+
+def _parse_comprehensively(pdf_bytes: bytes) -> dict[str, Any]:
+    """Run text+visual extraction and a focused recovery pass."""
+    cv_text = _extract_text(pdf_bytes)
+    images = _pdf_to_images(pdf_bytes)
+    primary_contents = _build_hybrid_contents(cv_text, images) if images else _build_text_contents(cv_text)
+    focused_contents = _build_focused_contents(cv_text, images) if images else _build_text_contents(cv_text)
+    primary = _call_gemini(primary_contents)
+    focused = _call_gemini(focused_contents)
+    return _merge_parsed_data(primary, focused)
 
 
 def _download_cv(bucket: str, stored_key: str) -> bytes:
@@ -230,17 +312,7 @@ async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
     try:
         pdf_bytes: bytes = await asyncio.to_thread(_download_cv, bucket, stored_key)
 
-        cv_text = await asyncio.to_thread(_extract_text, pdf_bytes)
-        if cv_text:
-            contents = _build_text_contents(cv_text)
-        else:
-            images = await asyncio.to_thread(_pdf_to_images, pdf_bytes)
-            if not images:
-                logger.warning("Could not render CV for candidate %d", candidate_id)
-                return None
-            contents = _build_image_contents(images)
-
-        result: dict[str, Any] = await asyncio.to_thread(_call_gemini, contents)
+        result: dict[str, Any] = await asyncio.to_thread(_parse_comprehensively, pdf_bytes)
     except Exception:
         logger.exception("CV parse failed during processing for candidate %d", candidate_id)
         return None
@@ -270,15 +342,7 @@ async def parse_cv_bytes(pdf_bytes: bytes) -> dict[str, Any] | None:
         return None
 
     try:
-        cv_text = await asyncio.to_thread(_extract_text, pdf_bytes)
-        if cv_text:
-            contents = _build_text_contents(cv_text)
-        else:
-            images = await asyncio.to_thread(_pdf_to_images, pdf_bytes)
-            if not images:
-                return None
-            contents = _build_image_contents(images)
-        return await asyncio.to_thread(_call_gemini, contents)
+        return await asyncio.to_thread(_parse_comprehensively, pdf_bytes)
     except Exception:
         logger.exception("Direct CV parse failed")
         return None

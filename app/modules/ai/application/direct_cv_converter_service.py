@@ -52,5 +52,10 @@ async def convert_cv(pdf_bytes: bytes, session: AsyncSession) -> tuple[dict[str,
         "home_address": personal.get("homeAddress") or "",
     }
     document = build_profile_word_from_data(profile, parsed)
-    preview = {**personal, "catalogNames": names, "parsedData": parsed}
+    warnings = []
+    if not parsed.get("experience"):
+        warnings.append("No se identificó experiencia laboral; revisa el PDF antes de descargar.")
+    if not parsed.get("certifications"):
+        warnings.append("No se identificaron cursos o certificaciones.")
+    preview = {**personal, "catalogNames": names, "parsedData": parsed, "warnings": warnings}
     return preview, document
