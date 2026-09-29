@@ -170,6 +170,7 @@ async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
             logger.exception("CV parse failed reading DB for candidate %d", candidate_id)
             return None
 
+
     # ── Phase 2: blocking I/O + AI call — session closed ────────────────────
     try:
         pdf_bytes: bytes = await asyncio.to_thread(_download_cv, bucket, stored_key)
@@ -203,3 +204,26 @@ async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
             await session.rollback()
             logger.exception("CV parse failed writing result for candidate %d", candidate_id)
             return None
+
+
+async def parse_cv_bytes(pdf_bytes: bytes) -> dict[str, Any] | None:
+    """Parse a CV without requiring a persisted candidate or storing results."""
+    import asyncio
+
+    if not settings.gemini_api_key:
+        logger.warning("GEMINI_API_KEY not set — skipping direct CV parse")
+        return None
+
+    try:
+        cv_text = await asyncio.to_thread(_extract_text, pdf_bytes)
+        if cv_text:
+            contents = _build_text_contents(cv_text)
+        else:
+            images = await asyncio.to_thread(_pdf_to_images, pdf_bytes)
+            if not images:
+                return None
+            contents = _build_image_contents(images)
+        return await asyncio.to_thread(_call_gemini, contents)
+    except Exception:
+        logger.exception("Direct CV parse failed")
+        return None

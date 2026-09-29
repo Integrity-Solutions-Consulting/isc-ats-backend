@@ -375,3 +375,41 @@ async def generate_profile_word(application_id: int) -> bytes:
     doc.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+def build_profile_word_from_data(profile: dict[str, str], parsed: dict[str, Any]) -> bytes:
+    """Build the company profile document from transient CV data.
+
+    This is the non-persisted counterpart of ``generate_profile_word`` used by
+    the direct converter. It deliberately reuses the same template fillers so
+    both entry points produce the same document structure.
+    """
+    doc = Document(TEMPLATE_PATH)
+    _fill_simple_table(doc.tables[0], {
+        0: profile.get("full_name", ""),
+        1: profile.get("position", ""),
+        2: profile.get("title", ""),
+        3: profile.get("university", ""),
+        4: profile.get("location", ""),
+        5: profile.get("email", ""),
+        6: profile.get("id_number", ""),
+        7: profile.get("phone", ""),
+        8: profile.get("home_address", ""),
+        9: "",
+    })
+
+    _fill_experience_section(doc, parsed.get("experience", []))
+    skills = parsed.get("skills", [])
+    tools = parsed.get("tools", [])
+    tech_placeholder = _find_bullet_placeholder(doc, "3. CONOCIMIENTOS")
+    if tech_placeholder is not None:
+        _fill_bullet_section(doc, tech_placeholder, skills + [t for t in tools if t not in skills])
+    soft_placeholder = _find_bullet_placeholder(doc, "4. HABILIDADES")
+    if soft_placeholder is not None:
+        _fill_bullet_section(doc, soft_placeholder, parsed.get("soft_skills", []))
+    _fill_certifications_table(doc, parsed.get("certifications", []))
+    _fill_projects_table(doc, parsed.get("projects", []))
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
