@@ -75,13 +75,68 @@ _PROMPT_HEADER = (
     "Lee el CV y extrae los datos en el JSON indicado.\n\n"
     "REGLAS:\n"
     "- NO extraigas información educativa (carrera, universidad, título).\n"
-    "- Incluye TODA la experiencia laboral que aparezca en el CV.\n"
+    "- Incluye TODA la experiencia laboral que aparezca en el CV; no la confundas con proyectos.\n"
+    "- Incluye TODAS las certificaciones, cursos y capacitaciones con institución y fechas.\n"
+    "- Si una sección existe en el CV, nunca la devuelvas vacía ni la omitas.\n"
     "- En 'skills' pon lenguajes de programación, frameworks y tecnologías.\n"
     "- En 'tools' pon herramientas, IDEs, plataformas y programas.\n"
     "- Los textos deben estar en español cuando sea posible.\n"
     "- Devuelve ÚNICAMENTE el JSON, sin texto adicional.\n\n"
     "Estructura exacta a devolver:\n"
 )
+
+
+def _normalise_parsed_data(raw: dict[str, Any]) -> dict[str, Any]:
+    """Accept common model variants while keeping one generator contract."""
+    def as_list(value: Any) -> list:
+        return value if isinstance(value, list) else []
+
+    experiences = raw.get("experience") or raw.get("work_experience") or raw.get("employment")
+    certifications = raw.get("certifications") or raw.get("certificates") or raw.get("courses")
+    projects = raw.get("projects") or raw.get("personal_projects")
+
+    normalised_experience = []
+    for item in as_list(experiences):
+        if not isinstance(item, dict):
+            continue
+        normalised_experience.append({
+            "company": item.get("company") or item.get("employer") or item.get("organization") or "",
+            "role": item.get("role") or item.get("position") or item.get("job_title") or "",
+            "start_date": item.get("start_date") or item.get("start") or "",
+            "end_date": item.get("end_date") or item.get("end") or "",
+            "functions": as_list(item.get("functions") or item.get("responsibilities") or item.get("duties")),
+            "tools": as_list(item.get("tools") or item.get("technologies")),
+        })
+
+    normalised_certifications = []
+    for item in as_list(certifications):
+        if not isinstance(item, dict):
+            continue
+        normalised_certifications.append({
+            "institution": item.get("institution") or item.get("provider") or item.get("organization") or "",
+            "name": item.get("name") or item.get("title") or item.get("course") or "",
+            "start": item.get("start") or item.get("start_date") or "",
+            "end": item.get("end") or item.get("end_date") or "",
+        })
+
+    normalised_projects = []
+    for item in as_list(projects):
+        if not isinstance(item, dict):
+            continue
+        normalised_projects.append({
+            "name": item.get("name") or item.get("title") or "",
+            "description": item.get("description") or item.get("details") or "",
+            "tools": as_list(item.get("tools") or item.get("technologies")),
+        })
+
+    return {
+        "experience": normalised_experience,
+        "projects": normalised_projects,
+        "skills": as_list(raw.get("skills") or raw.get("technical_skills")),
+        "tools": as_list(raw.get("tools") or raw.get("software")),
+        "soft_skills": as_list(raw.get("soft_skills") or raw.get("softSkills")),
+        "certifications": normalised_certifications,
+    }
 
 
 def _extract_text(pdf_bytes: bytes) -> str:
@@ -122,7 +177,7 @@ def _call_gemini(contents: list[Any]) -> dict:
                 contents=contents,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
-            return json.loads(response.text)
+            return _normalise_parsed_data(json.loads(response.text))
         except Exception as exc:
             status_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
             retryable = status_code in _RETRYABLE_CODES or any(str(c) in str(exc) for c in _RETRYABLE_CODES)

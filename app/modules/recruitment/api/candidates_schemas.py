@@ -148,6 +148,7 @@ class CvPrefillResponse(BaseModel):
     idNumber: str | None = None
     birthDate: str | None = None
     phone: str | None = None
+    email: str | None = None
     homeAddress: str | None = None
     currentCompany: str | None = None
     cityId: int | None = None
