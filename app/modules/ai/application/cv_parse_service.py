@@ -75,13 +75,102 @@ _PROMPT_HEADER = (
     "Lee el CV y extrae los datos en el JSON indicado.\n\n"
     "REGLAS:\n"
     "- NO extraigas información educativa (carrera, universidad, título).\n"
-    "- Incluye TODA la experiencia laboral que aparezca en el CV.\n"
+    "- Incluye TODA la experiencia laboral que aparezca en el CV; no la confundas con proyectos.\n"
+    "- Incluye TODAS las certificaciones, cursos y capacitaciones con institución y fechas.\n"
+    "- Si una sección existe en el CV, nunca la devuelvas vacía ni la omitas.\n"
     "- En 'skills' pon lenguajes de programación, frameworks y tecnologías.\n"
     "- En 'tools' pon herramientas, IDEs, plataformas y programas.\n"
     "- Los textos deben estar en español cuando sea posible.\n"
     "- Devuelve ÚNICAMENTE el JSON, sin texto adicional.\n\n"
     "Estructura exacta a devolver:\n"
 )
+
+_FOCUSED_SCHEMA = """{
+  "experience": [{
+    "company": "empresa",
+    "role": "cargo",
+    "start_date": "inicio visible",
+    "end_date": "fin visible o Actualidad",
+    "functions": ["responsabilidad visible"],
+    "tools": ["tecnología visible"]
+  }],
+  "certifications": [{
+    "institution": "institución",
+    "name": "curso o certificación",
+    "start": "inicio visible",
+    "end": "fin visible"
+  }],
+  "projects": [{
+    "name": "nombre exacto del proyecto",
+    "description": "descripción fiel, sin inventar ni resumir demasiado",
+    "tools": ["herramienta visible"]
+  }]
+}"""
+
+_FOCUSED_PROMPT = (
+    "Eres un extractor de CV. Analiza el documento completo, incluyendo su diseño visual. "
+    "Extrae únicamente información visible y devuelve SOLO JSON.\n"
+    "No confundas proyectos personales con experiencia laboral.\n"
+    "Busca explícitamente secciones tituladas EXPERIENCIA, EXPERIENCIA LABORAL, "
+    "HISTORIAL PROFESIONAL, CERTIFICACIONES, CURSOS y PROYECTOS.\n"
+    "Incluye cada empleo, cada certificación y cada proyecto; no omitas elementos "
+    "porque estén en otra columna o en otra página. Si una sección no existe, devuelve [].\n"
+    "Conserva los nombres y textos del CV; no inventes fechas, empresas ni funciones.\n"
+    "Estructura exacta:\n"
+)
+
+
+def _normalise_parsed_data(raw: dict[str, Any]) -> dict[str, Any]:
+    """Accept common model variants while keeping one generator contract."""
+    def as_list(value: Any) -> list:
+        return value if isinstance(value, list) else []
+
+    experiences = raw.get("experience") or raw.get("work_experience") or raw.get("employment")
+    certifications = raw.get("certifications") or raw.get("certificates") or raw.get("courses")
+    projects = raw.get("projects") or raw.get("personal_projects")
+
+    normalised_experience = []
+    for item in as_list(experiences):
+        if not isinstance(item, dict):
+            continue
+        normalised_experience.append({
+            "company": item.get("company") or item.get("employer") or item.get("organization") or "",
+            "role": item.get("role") or item.get("position") or item.get("job_title") or "",
+            "start_date": item.get("start_date") or item.get("start") or "",
+            "end_date": item.get("end_date") or item.get("end") or "",
+            "functions": as_list(item.get("functions") or item.get("responsibilities") or item.get("duties")),
+            "tools": as_list(item.get("tools") or item.get("technologies")),
+        })
+
+    normalised_certifications = []
+    for item in as_list(certifications):
+        if not isinstance(item, dict):
+            continue
+        normalised_certifications.append({
+            "institution": item.get("institution") or item.get("provider") or item.get("organization") or "",
+            "name": item.get("name") or item.get("title") or item.get("course") or "",
+            "start": item.get("start") or item.get("start_date") or "",
+            "end": item.get("end") or item.get("end_date") or "",
+        })
+
+    normalised_projects = []
+    for item in as_list(projects):
+        if not isinstance(item, dict):
+            continue
+        normalised_projects.append({
+            "name": item.get("name") or item.get("title") or "",
+            "description": item.get("description") or item.get("details") or "",
+            "tools": as_list(item.get("tools") or item.get("technologies")),
+        })
+
+    return {
+        "experience": normalised_experience,
+        "projects": normalised_projects,
+        "skills": as_list(raw.get("skills") or raw.get("technical_skills")),
+        "tools": as_list(raw.get("tools") or raw.get("software")),
+        "soft_skills": as_list(raw.get("soft_skills") or raw.get("softSkills")),
+        "certifications": normalised_certifications,
+    }
 
 
 def _extract_text(pdf_bytes: bytes) -> str:
@@ -112,6 +201,29 @@ def _build_image_contents(images: list[bytes]) -> list[Any]:
     return parts
 
 
+def _build_hybrid_contents(cv_text: str, images: list[bytes]) -> list[Any]:
+    """Give the model both reading order and visual layout for column-based CVs."""
+    parts: list[Any] = [
+        _PROMPT_HEADER
+        + _JSON_SCHEMA
+        + f"\n\n## Texto extraído (puede tener columnas desordenadas)\n<CV>\n{cv_text[:14000]}\n</CV>\n"
+        + "\n## Imágenes originales de las páginas\n"
+    ]
+    parts.extend(types.Part.from_bytes(data=image, mime_type="image/png") for image in images)
+    return parts
+
+
+def _build_focused_contents(cv_text: str, images: list[bytes]) -> list[Any]:
+    parts: list[Any] = [
+        _FOCUSED_PROMPT
+        + _FOCUSED_SCHEMA
+        + f"\n\n## Texto del CV\n<CV>\n{cv_text[:18000]}\n</CV>\n"
+        + "\n## Vista visual del CV\n"
+    ]
+    parts.extend(types.Part.from_bytes(data=image, mime_type="image/png") for image in images)
+    return parts
+
+
 def _call_gemini(contents: list[Any]) -> dict:
     client = genai.Client(api_key=settings.gemini_api_key)
     last_exc: Exception | None = None
@@ -122,7 +234,7 @@ def _call_gemini(contents: list[Any]) -> dict:
                 contents=contents,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
-            return json.loads(response.text)
+            return _normalise_parsed_data(json.loads(response.text))
         except Exception as exc:
             status_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
             retryable = status_code in _RETRYABLE_CODES or any(str(c) in str(exc) for c in _RETRYABLE_CODES)
@@ -131,6 +243,31 @@ def _call_gemini(contents: list[Any]) -> dict:
             if not retryable:
                 break
     raise RuntimeError(f"All models failed. Last error: {last_exc}") from last_exc
+
+
+def _merge_parsed_data(primary: dict[str, Any], focused: dict[str, Any]) -> dict[str, Any]:
+    """Prefer the focused pass for sections most often lost in columns."""
+    first = _normalise_parsed_data(primary)
+    second = _normalise_parsed_data(focused)
+    merged = dict(first)
+    for key in ("experience", "certifications", "projects"):
+        if second.get(key):
+            merged[key] = second[key]
+    for key in ("skills", "tools", "soft_skills"):
+        values = list(first.get(key, [])) + list(second.get(key, []))
+        merged[key] = list(dict.fromkeys(v for v in values if v))
+    return merged
+
+
+def _parse_comprehensively(pdf_bytes: bytes) -> dict[str, Any]:
+    """Run text+visual extraction and a focused recovery pass."""
+    cv_text = _extract_text(pdf_bytes)
+    images = _pdf_to_images(pdf_bytes)
+    primary_contents = _build_hybrid_contents(cv_text, images) if images else _build_text_contents(cv_text)
+    focused_contents = _build_focused_contents(cv_text, images) if images else _build_text_contents(cv_text)
+    primary = _call_gemini(primary_contents)
+    focused = _call_gemini(focused_contents)
+    return _merge_parsed_data(primary, focused)
 
 
 def _download_cv(bucket: str, stored_key: str) -> bytes:
@@ -170,21 +307,12 @@ async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
             logger.exception("CV parse failed reading DB for candidate %d", candidate_id)
             return None
 
+
     # ── Phase 2: blocking I/O + AI call — session closed ────────────────────
     try:
         pdf_bytes: bytes = await asyncio.to_thread(_download_cv, bucket, stored_key)
 
-        cv_text = await asyncio.to_thread(_extract_text, pdf_bytes)
-        if cv_text:
-            contents = _build_text_contents(cv_text)
-        else:
-            images = await asyncio.to_thread(_pdf_to_images, pdf_bytes)
-            if not images:
-                logger.warning("Could not render CV for candidate %d", candidate_id)
-                return None
-            contents = _build_image_contents(images)
-
-        result: dict[str, Any] = await asyncio.to_thread(_call_gemini, contents)
+        result: dict[str, Any] = await asyncio.to_thread(_parse_comprehensively, pdf_bytes)
     except Exception:
         logger.exception("CV parse failed during processing for candidate %d", candidate_id)
         return None
@@ -203,3 +331,18 @@ async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
             await session.rollback()
             logger.exception("CV parse failed writing result for candidate %d", candidate_id)
             return None
+
+
+async def parse_cv_bytes(pdf_bytes: bytes) -> dict[str, Any] | None:
+    """Parse a CV without requiring a persisted candidate or storing results."""
+    import asyncio
+
+    if not settings.gemini_api_key:
+        logger.warning("GEMINI_API_KEY not set — skipping direct CV parse")
+        return None
+
+    try:
+        return await asyncio.to_thread(_parse_comprehensively, pdf_bytes)
+    except Exception:
+        logger.exception("Direct CV parse failed")
+        return None
