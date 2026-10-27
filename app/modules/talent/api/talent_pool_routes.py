@@ -42,6 +42,18 @@ async def list_talent_pool(
     size: Annotated[int, Query(ge=1, le=100)] = 20,
     candidate_id: Annotated[int | None, Query()] = None,
     source_vacancy_id: Annotated[int | None, Query()] = None,
+    skill: Annotated[
+        str | None,
+        Query(description="Filtrar por conocimientos o tecnologías (ej: Python, C#)"),
+    ] = None,
+    tool: Annotated[
+        str | None,
+        Query(description="Filtrar por herramientas o software (ej: Docker, Power BI)"),
+    ] = None,
+    search: Annotated[
+        str | None,
+        Query(description="Búsqueda por nombre, apellido o correo del candidato"),
+    ] = None,
     include_inactive: Annotated[bool, Query()] = False,
 ) -> Page[TalentPoolRead]:
     params = PageParams(page=page, size=size)
@@ -49,9 +61,12 @@ async def list_talent_pool(
         params,
         candidate_id=candidate_id,
         source_vacancy_id=source_vacancy_id,
+        skill=skill,
+        tool=tool,
+        search=search,
         include_inactive=include_inactive,
     )
-    return Page.create([TalentPoolRead.model_validate(i) for i in items], total, params)
+    return Page.create(items, total, params)
 
 
 @router.get(
@@ -61,7 +76,7 @@ async def list_talent_pool(
 )
 async def get_talent_pool_entry(entry_id: int, service: ServiceDep) -> TalentPoolRead:
     try:
-        return TalentPoolRead.model_validate(await service.get(entry_id))
+        return await service.get_enriched(entry_id)
     except TalentPoolNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
@@ -81,7 +96,7 @@ async def add_to_talent_pool(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except DuplicateTalentPoolError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    return TalentPoolRead.model_validate(created)
+    return await service.get_enriched(created.id)
 
 
 @router.delete(
