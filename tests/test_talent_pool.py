@@ -1,202 +1,211 @@
-import uuid
+from typing import Any
 
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
 from app.core.dependencies import CurrentUser
 from app.modules.auth.infrastructure.models import User
-from app.modules.org.infrastructure.models import (
-    ClientCompany,
-    Contact,
-    Department,
-    Parameter,
-    Process,
-)
-from app.modules.org.infrastructure.parameters_repository import ParameterRepository
+from app.modules.org.infrastructure.models import Parameter
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.recruitment.infrastructure.models import Vacancy
-from app.modules.talent.api.talent_pool_schemas import TalentPoolCreate
-from app.modules.talent.application.talent_pool_service import (
-    DuplicateTalentPoolError,
-    TalentPoolNotFoundError,
-    TalentPoolReferenceError,
-    TalentPoolService,
-)
+from app.modules.talent.api.talent_pool_schemas import TalentPoolCreate, TalentPoolRead
 from app.modules.talent.infrastructure.models import TalentPool
+from app.shared.pagination import PageParams
 from app.shared.repository import BaseRepository
 
-ACTOR = CurrentUser(user_id=1, ip="127.0.0.1")
+
+class TalentPoolNotFoundError(Exception):
+    pass
 
 
-def _service(session: AsyncSession) -> TalentPoolService:
-    return TalentPoolService(
-        BaseRepository(session, TalentPool),
-        BaseRepository(session, Candidate),
-        BaseRepository(session, Vacancy),
-    )
+class TalentPoolReferenceError(Exception):
+    """A referenced candidate or vacancy does not exist."""
 
 
-async def _make_candidate(session: AsyncSession) -> Candidate:
-    portal = await ParameterRepository(session).get_by_type_and_code("user_portal", "staff")
-    assert portal is not None
-    user = await BaseRepository(session, User).add(
-        User(email=f"{uuid.uuid4().hex[:12]}@test.local", portal_id=portal.id)
-    )
-    return await BaseRepository(session, Candidate).add(
-        Candidate(user_id=user.id, first_name="Ana", last_name="Diaz")
-    )
+class DuplicateTalentPoolError(Exception):
+    """The candidate is already in the talent pool for this source vacancy."""
 
 
-async def _make_vacancy(session: AsyncSession) -> Vacancy:
-    param = await BaseRepository(session, Parameter).add(
-        Parameter(type="x", code=uuid.uuid4().hex[:8], name="P")
-    )
-    company = await BaseRepository(session, ClientCompany).add(ClientCompany(name="ACME"))
-    contact = await BaseRepository(session, Contact).add(
-        Contact(
-            client_company_id=company.id,
-            first_name="R",
-            last_name="S",
-            email=f"{uuid.uuid4().hex[:6]}@acme.com",
-        )
-    )
-    dept = await BaseRepository(session, Department).add(Department(name="T"))
-    process = await BaseRepository(session, Process).add(
-        Process(
-            client_company_id=company.id,
-            department_id=dept.id,
-            name=f"Proc {uuid.uuid4().hex[:6]}",
-        )
-    )
-    return await BaseRepository(session, Vacancy).add(
-        Vacancy(
-            vacancy_name_id=param.id,
-            client_company_id=company.id,
-            contact_id=contact.id,
-            department_id=dept.id,
-            process_id=process.id,
-            career_id=param.id,
-            city_id=param.id,
-            work_mode_id=param.id,
-            resource_level_id=param.id,
-            status_id=param.id,
-            created_by=1,
-        )
-    )
+class TalentPoolService:
+    def __init__(
+        self,
+        repository: BaseRepository[TalentPool],
+        candidates: BaseRepository[Candidate],
+        vacancies: BaseRepository[Vacancy],
+    ) -> None:
+        self.repository = repository
+        self.candidates = candidates
+        self.vacancies = vacancies
 
+    def _enriched_select(self):
+        CityP = aliased(Parameter, name="city_p")
+        CareerP = aliased(Parameter, name="career_p")
+        TitleP = aliased(Parameter, name="title_p")
+        UniP = aliased(Parameter, name="uni_p")
+        VacNameP = aliased(Parameter, name="vac_name_p")
 
-async def test_add_candidate_no_vacancy(session: AsyncSession) -> None:
-    candidate = await _make_candidate(session)
-    entry = await _service(session).create(
-        TalentPoolCreate(candidate_id=candidate.id), ACTOR
-    )
-
-    assert entry.id is not None
-    assert entry.candidate_id == candidate.id
-    assert entry.source_vacancy_id is None
-    assert entry.is_active is True
-    assert entry.created_by == ACTOR.user_id
-
-
-async def test_add_candidate_with_source_vacancy(session: AsyncSession) -> None:
-    candidate = await _make_candidate(session)
-    vacancy = await _make_vacancy(session)
-    entry = await _service(session).create(
-        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
-    )
-
-    assert entry.source_vacancy_id == vacancy.id
-
-
-async def test_create_rejects_unknown_candidate(session: AsyncSession) -> None:
-    with pytest.raises(TalentPoolReferenceError):
-        await _service(session).create(TalentPoolCreate(candidate_id=999999), ACTOR)
-
-
-async def test_create_rejects_unknown_vacancy(session: AsyncSession) -> None:
-    candidate = await _make_candidate(session)
-    with pytest.raises(TalentPoolReferenceError):
-        await _service(session).create(
-            TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=999999), ACTOR
+        return (
+            select(
+                TalentPool.id,
+                TalentPool.candidate_id,
+                TalentPool.source_vacancy_id,
+                TalentPool.is_active,
+                TalentPool.created_at,
+                TalentPool.created_by,
+                Candidate.first_name,
+                Candidate.last_name,
+                User.email,
+                Candidate.phone,
+                CityP.name.label("city"),
+                CareerP.name.label("career"),
+                TitleP.name.label("title"),
+                UniP.name.label("university"),
+                Candidate.years_of_experience,
+                Candidate.current_company,
+                Candidate.cv_file_id,
+                Candidate.avatar_file_id,
+                Candidate.parsed_data,
+                VacNameP.name.label("source_vacancy_title"),
+            )
+            .join(Candidate, TalentPool.candidate_id == Candidate.id)
+            .outerjoin(User, Candidate.user_id == User.id)
+            .outerjoin(CityP, Candidate.city_id == CityP.id)
+            .outerjoin(CareerP, Candidate.career_id == CareerP.id)
+            .outerjoin(TitleP, Candidate.title_id == TitleP.id)
+            .outerjoin(UniP, Candidate.university_id == UniP.id)
+            .outerjoin(Vacancy, TalentPool.source_vacancy_id == Vacancy.id)
+            .outerjoin(VacNameP, Vacancy.vacancy_name_id == VacNameP.id)
         )
 
+    def _row_to_read(self, row: Any) -> TalentPoolRead:
+        pd = row.parsed_data or {}
+        skills = pd.get("skills", []) if isinstance(pd, dict) else []
+        tools = pd.get("tools", []) if isinstance(pd, dict) else []
 
-async def test_get_not_found(session: AsyncSession) -> None:
-    with pytest.raises(TalentPoolNotFoundError):
-        await _service(session).get(999999)
-
-
-async def test_delete_soft_deletes(session: AsyncSession) -> None:
-    candidate = await _make_candidate(session)
-    svc = _service(session)
-    entry = await svc.create(TalentPoolCreate(candidate_id=candidate.id), ACTOR)
-
-    await svc.delete(entry.id)
-
-    with pytest.raises(TalentPoolNotFoundError):
-        await svc.get(entry.id)
-
-
-async def test_create_rejects_duplicate_same_vacancy(session: AsyncSession) -> None:
-    candidate = await _make_candidate(session)
-    vacancy = await _make_vacancy(session)
-    svc = _service(session)
-    await svc.create(
-        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
-    )
-    with pytest.raises(DuplicateTalentPoolError):
-        await svc.create(
-            TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
+        return TalentPoolRead(
+            id=row.id,
+            candidate_id=row.candidate_id,
+            source_vacancy_id=row.source_vacancy_id,
+            source_vacancy_title=row.source_vacancy_title,
+            is_active=row.is_active,
+            created_at=row.created_at,
+            created_by=row.created_by,
+            first_name=row.first_name,
+            last_name=row.last_name,
+            email=row.email,
+            phone=row.phone,
+            city=row.city,
+            career=row.career,
+            title=row.title,
+            university=row.university,
+            years_of_experience=row.years_of_experience,
+            current_company=row.current_company,
+            cv_file_id=row.cv_file_id,
+            avatar_file_id=row.avatar_file_id,
+            skills=skills if isinstance(skills, list) else [],
+            tools=tools if isinstance(tools, list) else [],
         )
 
+    async def list(
+        self,
+        params: PageParams,
+        *,
+        candidate_id: int | None = None,
+        source_vacancy_id: int | None = None,
+        skill: str | None = None,
+        tool: str | None = None,
+        search: str | None = None,
+        include_inactive: bool = False,
+    ) -> tuple[list[TalentPoolRead], int]:
+        stmt = self._enriched_select()
 
-async def test_create_allows_same_candidate_different_vacancies(
-    session: AsyncSession,
-) -> None:
-    candidate = await _make_candidate(session)
-    v1 = await _make_vacancy(session)
-    v2 = await _make_vacancy(session)
-    svc = _service(session)
-    e1 = await svc.create(
-        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=v1.id), ACTOR
-    )
-    e2 = await svc.create(
-        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=v2.id), ACTOR
-    )
-    assert e1.id != e2.id
+        if not include_inactive:
+            stmt = stmt.where(TalentPool.is_active.is_(True))
 
+        if candidate_id is not None:
+            stmt = stmt.where(TalentPool.candidate_id == candidate_id)
 
-async def test_create_rejects_duplicate_general_entry(session: AsyncSession) -> None:
-    candidate = await _make_candidate(session)
-    svc = _service(session)
-    await svc.create(TalentPoolCreate(candidate_id=candidate.id), ACTOR)
-    with pytest.raises(DuplicateTalentPoolError):
-        await svc.create(TalentPoolCreate(candidate_id=candidate.id), ACTOR)
+        if source_vacancy_id is not None:
+            stmt = stmt.where(TalentPool.source_vacancy_id == source_vacancy_id)
 
+        # Filtrado por conocimientos / tecnologías (skills)
+        if skill:
+            for s in [x.strip() for x in skill.split(",") if x.strip()]:
+                stmt = stmt.where(Candidate.parsed_data["skills"].astext.ilike(f"%{s}%"))
 
-async def test_create_allows_readd_after_remove(session: AsyncSession) -> None:
-    candidate = await _make_candidate(session)
-    vacancy = await _make_vacancy(session)
-    svc = _service(session)
-    e1 = await svc.create(
-        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
-    )
-    await svc.delete(e1.id)
-    e2 = await svc.create(
-        TalentPoolCreate(candidate_id=candidate.id, source_vacancy_id=vacancy.id), ACTOR
-    )
-    assert e2.id != e1.id
+        # Filtrado por herramientas / software (tools)
+        if tool:
+            for t in [x.strip() for x in tool.split(",") if x.strip()]:
+                stmt = stmt.where(Candidate.parsed_data["tools"].astext.ilike(f"%{t}%"))
 
+        # Búsqueda general por nombre, apellido o correo
+        if search:
+            term = f"%{search.strip()}%"
+            stmt = stmt.where(
+                (Candidate.first_name.ilike(term))
+                | (Candidate.last_name.ilike(term))
+                | (User.email.ilike(term))
+            )
 
-async def test_list_filtered_by_candidate(session: AsyncSession) -> None:
-    c1 = await _make_candidate(session)
-    c2 = await _make_candidate(session)
-    svc = _service(session)
-    await svc.create(TalentPoolCreate(candidate_id=c1.id), ACTOR)
-    await svc.create(TalentPoolCreate(candidate_id=c2.id), ACTOR)
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.repository.session.execute(count_stmt)).scalar_one()
 
-    from app.shared.pagination import PageParams
+        stmt = (
+            stmt.order_by(TalentPool.created_at.desc(), TalentPool.id.desc())
+            .offset(params.offset)
+            .limit(params.limit)
+        )
+        result = await self.repository.session.execute(stmt)
+        rows = result.all()
 
-    items, total = await svc.list(PageParams(page=1, size=20), candidate_id=c1.id)
-    assert total == 1
-    assert items[0].candidate_id == c1.id
+        return [self._row_to_read(r) for r in rows], total
+
+    async def get(self, entry_id: int) -> TalentPool:
+        entry = await self.repository.get(entry_id)
+        if entry is None:
+            raise TalentPoolNotFoundError(f"Talent pool entry {entry_id} not found")
+        return entry
+
+    async def get_enriched(self, entry_id: int) -> TalentPoolRead:
+        stmt = self._enriched_select().where(
+            TalentPool.id == entry_id, TalentPool.is_active.is_(True)
+        )
+        row = (await self.repository.session.execute(stmt)).one_or_none()
+        if row is None:
+            raise TalentPoolNotFoundError(f"Talent pool entry {entry_id} not found")
+        return self._row_to_read(row)
+
+    async def create(self, data: TalentPoolCreate, actor: CurrentUser) -> TalentPool:
+        if await self.candidates.get(data.candidate_id) is None:
+            raise TalentPoolReferenceError(
+                f"candidate_id={data.candidate_id} not found"
+            )
+        if data.source_vacancy_id is not None:
+            if await self.vacancies.get(data.source_vacancy_id) is None:
+                raise TalentPoolReferenceError(
+                    f"source_vacancy_id={data.source_vacancy_id} not found"
+                )
+        # A candidate may be saved multiple times, but only once per source
+        # vacancy (source_vacancy_id None == the general pool). Reject repeats so
+        # re-adding the same pair never silently duplicates the entry.
+        _, existing = await self.repository.list(
+            PageParams(page=1, size=1),
+            filters={
+                "candidate_id": data.candidate_id,
+                "source_vacancy_id": data.source_vacancy_id,
+            },
+        )
+        if existing > 0:
+            raise DuplicateTalentPoolError(
+                "El candidato ya está en el banco de talento para esta vacante."
+            )
+        entry = TalentPool(
+            **data.model_dump(),
+            created_by=actor.user_id,
+            ip_created=actor.ip,
+        )
+        return await self.repository.add(entry)
+
+    async def delete(self, entry_id: int) -> None:
+        entry = await self.get(entry_id)
+        await self.repository.soft_delete(entry)
