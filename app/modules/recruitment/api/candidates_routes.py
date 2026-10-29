@@ -22,6 +22,7 @@ from app.modules.auth.infrastructure.models import User
 from app.modules.org.infrastructure.models import Parameter
 from app.modules.recruitment.api.candidates_schemas import (
     CandidateCreate,
+    CandidateDirectoryRead,
     CandidateExpandedRead,
     CandidateRead,
     CandidateUpdate,
@@ -85,6 +86,65 @@ async def list_candidates(
 # Static routes must be registered BEFORE /{candidate_id} so Starlette doesn't
 # match "expanded" as a candidate_id path parameter.
 @router.get(
+    "/directory",
+    response_model=Page[CandidateDirectoryRead],
+    dependencies=[Depends(require_permission("recruitment.candidates.read"))],
+)
+async def list_candidates_directory(
+    service: ServiceDep,
+    current_user: CurrentUserDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    size: Annotated[int, Query(ge=1, le=100)] = 20,
+    search: Annotated[
+        str | None,
+        Query(description="Búsqueda por nombre, apellido, correo o cédula del candidato"),
+    ] = None,
+    skill: Annotated[
+        str | None,
+        Query(description="Filtrar por conocimientos o tecnologías (ej: Python, C#)"),
+    ] = None,
+    tool: Annotated[
+        str | None,
+        Query(description="Filtrar por herramientas o software (ej: Docker, Power BI)"),
+    ] = None,
+    career: Annotated[
+        str | None,
+        Query(description="Filtrar por carrera profesional"),
+    ] = None,
+    career_id: Annotated[int | None, Query(description="Filtrar por ID de carrera")] = None,
+    city_id: Annotated[int | None, Query(description="Filtrar por ID de ciudad")] = None,
+    vacancy_id: Annotated[
+        int | None, Query(description="Filtrar por ID de vacante postulada")
+    ] = None,
+    in_talent_pool: Annotated[
+        bool | None,
+        Query(description="Filtrar si el candidato pertenece o no al banco de talento"),
+    ] = None,
+    only_applied: Annotated[
+        bool,
+        Query(description="Filtrar únicamente candidatos que tengan al menos una postulación"),
+    ] = False,
+    include_inactive: Annotated[bool, Query()] = False,
+) -> Page[CandidateDirectoryRead]:
+    forbid_candidate_portal(current_user)
+    params = PageParams(page=page, size=size)
+    items, total = await service.list_directory(
+        params,
+        search=search,
+        skill=skill,
+        tool=tool,
+        career=career,
+        career_id=career_id,
+        city_id=city_id,
+        vacancy_id=vacancy_id,
+        in_talent_pool=in_talent_pool,
+        only_applied=only_applied,
+        include_inactive=include_inactive,
+    )
+    return Page.create(items, total, params)
+
+
+@router.get(
     "/expanded",
     response_model=Page[CandidateExpandedRead],
     dependencies=[Depends(require_permission("recruitment.candidates.read"))],
@@ -95,15 +155,41 @@ async def list_candidates_expanded(
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=100)] = 50,
     user_id: Annotated[int | None, Query()] = None,
+    search: Annotated[str | None, Query()] = None,
+    skill: Annotated[str | None, Query()] = None,
+    tool: Annotated[str | None, Query()] = None,
+    career: Annotated[str | None, Query()] = None,
+    career_id: Annotated[int | None, Query()] = None,
+    city_id: Annotated[int | None, Query()] = None,
+    vacancy_id: Annotated[int | None, Query()] = None,
+    in_talent_pool: Annotated[bool | None, Query()] = None,
+    only_applied: Annotated[bool, Query()] = False,
 ) -> Page[CandidateExpandedRead]:
     # Candidates only ever see their own row, whatever user_id they ask for.
     if is_candidate_portal(current_user):
         user_id = current_user.user_id
+        params = PageParams(page=page, size=size)
+        items, total = await service.list_expanded(params, user_id=user_id)
+        return Page.create([CandidateExpandedRead(**vars(item)) for item in items], total, params)
+
     params = PageParams(page=page, size=size)
-    items, total = await service.list_expanded(params, user_id=user_id)
-    return Page.create(
-        [CandidateExpandedRead(**vars(item)) for item in items], total, params
+    if user_id is not None:
+        items, total = await service.list_expanded(params, user_id=user_id)
+        return Page.create([CandidateExpandedRead(**vars(item)) for item in items], total, params)
+
+    items, total = await service.list_directory(
+        params,
+        search=search,
+        skill=skill,
+        tool=tool,
+        career=career,
+        career_id=career_id,
+        city_id=city_id,
+        vacancy_id=vacancy_id,
+        in_talent_pool=in_talent_pool,
+        only_applied=only_applied,
     )
+    return Page.create(items, total, params)
 
 
 @router.get("/registration-catalog", response_model=RegistrationCatalogResponse)
@@ -127,10 +213,7 @@ async def registration_catalog(
     params = results.scalars().all()
 
     def to_options(type_: str) -> list[dict]:
-        return [
-            {"id": p.id, "code": p.code, "name": p.name}
-            for p in params if p.type == type_
-        ]
+        return [{"id": p.id, "code": p.code, "name": p.name} for p in params if p.type == type_]
 
     return RegistrationCatalogResponse(
         cities=to_options("city"),
@@ -169,13 +252,9 @@ async def cv_prefill(
     try:
         validate_upload_bytes("cv", pdf_bytes)
     except UploadTooLargeError as exc:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)) from exc
     except UploadTypeError as exc:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
     result = await prefill_from_bytes(pdf_bytes, session)
     return CvPrefillResponse(**result)
