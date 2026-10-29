@@ -158,6 +158,13 @@ class CvPrefillResponse(BaseModel):
     universityId: int | None = None
 
 
+class CandidateAppliedVacancy(BaseModel):
+    id: int
+    title: str
+    status: str | None = None
+    match_score: Decimal | None = None
+
+
 class CandidateExpandedRead(BaseModel):
     """Expanded candidate read — all FK fields resolved to human-readable labels."""
 
@@ -186,6 +193,25 @@ class CandidateExpandedRead(BaseModel):
     avatar_file_id: int | None
     is_active: bool
     created_at: datetime
+    created_by: int | None = None
+
+    # Enriched candidate profile details matching talent pool
+    candidate_id: int | None = None
+    skills: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+
+    # Talent pool & vacancy relationships
+    is_in_talent_pool: bool = False
+    talent_pool_id: int | None = None
+    source_vacancy_id: int | None = None
+    source_vacancy_title: str | None = None
+    applied_vacancies: list[CandidateAppliedVacancy] = Field(default_factory=list)
+
+
+class CandidateDirectoryRead(CandidateExpandedRead):
+    """Candidate directory view — enriched profile data matching talent pool structure."""
+
+    candidate_id: int
 
 
 class CatalogOption(BaseModel):

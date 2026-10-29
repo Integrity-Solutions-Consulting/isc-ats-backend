@@ -7,6 +7,7 @@ from app.modules.auth.infrastructure.models import User
 from app.modules.org.infrastructure.models import Parameter
 from app.modules.recruitment.api.candidates_schemas import (
     CandidateCreate,
+    CandidateDirectoryRead,
     CandidateUpdate,
 )
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
@@ -65,6 +66,37 @@ class CandidateService:
     ) -> tuple[list[CandidateExpanded], int]:
         return await self.expanded.list_expanded(params, user_id=user_id)
 
+    async def list_directory(
+        self,
+        params: PageParams,
+        *,
+        search: str | None = None,
+        skill: str | None = None,
+        tool: str | None = None,
+        career: str | None = None,
+        career_id: int | None = None,
+        city_id: int | None = None,
+        candidate_id: int | None = None,
+        vacancy_id: int | None = None,
+        in_talent_pool: bool | None = None,
+        only_applied: bool = False,
+        include_inactive: bool = False,
+    ) -> tuple[list[CandidateDirectoryRead], int]:
+        return await self.expanded.list_directory(
+            params,
+            search=search,
+            skill=skill,
+            tool=tool,
+            career=career,
+            career_id=career_id,
+            city_id=city_id,
+            candidate_id=candidate_id,
+            vacancy_id=vacancy_id,
+            in_talent_pool=in_talent_pool,
+            only_applied=only_applied,
+            include_inactive=include_inactive,
+        )
+
     async def get(self, candidate_id: int) -> Candidate:
         candidate = await self.repository.get(candidate_id)
         if candidate is None:
@@ -75,9 +107,7 @@ class CandidateService:
         if await self.users.get(data.user_id) is None:
             raise CandidateReferenceError(f"user_id={data.user_id} not found")
         if await self.repository.get_by_user_id(data.user_id) is not None:
-            raise DuplicateCandidateError(
-                f"User {data.user_id} already has a candidate"
-            )
+            raise DuplicateCandidateError(f"User {data.user_id} already has a candidate")
         if data.cedula and await self.repository.get_by_cedula(data.cedula) is not None:
             raise DuplicateCandidateError(f"Cedula {data.cedula} already registered")
         await self._validate_optional_refs(data.model_dump(), actor)
@@ -107,17 +137,13 @@ class CandidateService:
         candidate = await self.get(candidate_id)
         await self.repository.soft_delete(candidate)
 
-    async def _validate_optional_refs(
-        self, values: dict[str, Any], actor: CurrentUser
-    ) -> None:
+    async def _validate_optional_refs(self, values: dict[str, Any], actor: CurrentUser) -> None:
         for field in ("city_id", "education_level_id", "career_id", "title_id", "university_id"):
             await self._assert(self.parameters, values, field)
         for field in ("avatar_file_id", "cv_file_id"):
             await self._assert_owned_file(values, field, actor)
 
-    async def _assert(
-        self, repo: BaseRepository[Any], values: dict[str, Any], field: str
-    ) -> None:
+    async def _assert(self, repo: BaseRepository[Any], values: dict[str, Any], field: str) -> None:
         entity_id = values.get(field)
         if entity_id is not None and await repo.get(entity_id) is None:
             raise CandidateReferenceError(f"{field}={entity_id} not found")
