@@ -9,6 +9,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import select
 from fastapi import (
     File as FastAPIFile,
 )
@@ -35,6 +36,7 @@ from app.modules.recruitment.application.candidates_service import (
     CandidateService,
     DuplicateCandidateError,
 )
+from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.candidates_expanded import (
     CandidatesExpandedRepository,
 )
@@ -336,6 +338,16 @@ async def update_candidate(
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     if data.cv_file_id is not None:
         await task_queue.enqueue("parse_candidate_cv", candidate_id)
+        application_ids = (
+            await session.scalars(
+                select(Application.id).where(
+                    Application.candidate_id == candidate_id,
+                    Application.is_active.is_(True),
+                )
+            )
+        ).all()
+        for application_id in application_ids:
+            await task_queue.enqueue("analyze_application", application_id, True)
     return CandidateRead.model_validate(updated)
 
 

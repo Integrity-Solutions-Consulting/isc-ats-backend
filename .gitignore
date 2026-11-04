@@ -11,6 +11,7 @@ venv/
 # Environment
 .env
 .env.local
+.env.example
 
 # Test / coverage
 .pytest_cache/
@@ -32,3 +33,5 @@ Thumbs.db
 
 # Internal docs — not published to the company repository
 /docs/
+
+docker-compose.yml
