@@ -37,9 +37,10 @@ logger = logging.getLogger(__name__)
 
 # Models tried in order — first success wins.
 _FALLBACK_MODELS = [
+    "gemini-3.8-flash"
+    "gemini-2.5-flash",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
-    "gemini-2.5-flash",
     "gemini-3.1-flash-preview",
 ]
 
