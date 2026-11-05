@@ -320,6 +320,7 @@ async def update_candidate(
     candidate_id: int,
     data: CandidateUpdate,
     service: ServiceDep,
+    session: SessionDep,
     current_user: CurrentUserDep,
     task_queue: TaskQueueDep,
 ) -> CandidateRead:
