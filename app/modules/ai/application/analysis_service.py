@@ -175,9 +175,8 @@ def _call_gemini(contents: list[Any]) -> dict:
             return json.loads(response.text)
         except Exception as exc:
             status_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-            retryable = (
-                status_code in _RETRYABLE_CODES
-                or any(str(c) in str(exc) for c in _RETRYABLE_CODES)
+            retryable = status_code in _RETRYABLE_CODES or any(
+                str(c) in str(exc) for c in _RETRYABLE_CODES
             )
             logger.warning("Model %s failed (%s) — %s", model, status_code, exc)
             last_exc = exc
@@ -223,7 +222,15 @@ def _clamp_score(raw: Any) -> float:
     return max(0.0, min(100.0, value))
 
 
-async def analyze_application(application_id: int, force: bool = False) -> None:
+async def analyze_application(
+    application_id: int,
+    force: bool = False,
+    *,
+    strict: bool = False,
+    expected_file_id: int | None = None,
+    task_id: int | None = None,
+    lease_token: str | None = None,
+) -> None:
     """Entry point for the background task.
 
     Idempotent: if the application already has a ``match_score`` the analysis is
@@ -235,7 +242,11 @@ async def analyze_application(application_id: int, force: bool = False) -> None:
     import asyncio
 
     if not settings.gemini_api_key:
-        logger.warning("GEMINI_API_KEY not set — skipping analysis for application %d", application_id)
+        if strict:
+            raise ValueError("Gemini is not configured")
+        logger.warning(
+            "GEMINI_API_KEY not set — skipping analysis for application %d", application_id
+        )
         return
 
     # ── Phase 1: read everything from DB ────────────────────────────────────
@@ -243,7 +254,11 @@ async def analyze_application(application_id: int, force: bool = False) -> None:
         try:
             app_repo = ApplicationRepository(session)
             application: Application | None = await app_repo.get(application_id)
-            if not application:
+            if not application or (strict and not application.is_active):
+                if strict:
+                    from app.modules.ai.application.task_service import SupersededCvError
+
+                    raise SupersededCvError()
                 return
 
             if not force and application.match_score is not None:
@@ -255,8 +270,16 @@ async def analyze_application(application_id: int, force: bool = False) -> None:
                 return
 
             candidate: Candidate | None = await session.get(Candidate, application.candidate_id)
+            if strict:
+                from app.modules.ai.application.task_service import current_candidate
+
+                candidate = await current_candidate(
+                    session, application.candidate_id, expected_file_id
+                )
             vacancy: Vacancy | None = await session.get(Vacancy, application.vacancy_id)
             if not candidate or not vacancy:
+                if strict:
+                    raise ValueError("Candidate or vacancy not found")
                 return
 
             if not candidate.cv_file_id:
@@ -265,11 +288,15 @@ async def analyze_application(application_id: int, force: bool = False) -> None:
 
             cv_file: File | None = await session.get(File, candidate.cv_file_id)
             if not cv_file:
+                if strict:
+                    raise ValueError("CV file not found")
                 return
 
             bucket, stored_key = cv_file.bucket, cv_file.stored_key
             candidate_id_log = candidate.id
         except Exception:
+            if strict:
+                raise
             logger.exception("Analysis failed reading DB for application %d", application_id)
             return
 
@@ -279,11 +306,21 @@ async def analyze_application(application_id: int, force: bool = False) -> None:
         contents: list[Any] = await asyncio.to_thread(_prepare_contents, pdf_bytes, vacancy)
 
         if not contents:
+            if strict:
+                raise ValueError("CV cannot be read")
             logger.warning("Could not render CV pages for candidate %d", candidate_id_log)
-            no_text = json.dumps({
-                "noTextLayer": True, "summary": "", "strengths": [], "gaps": [],
-                "skills": [], "tools": [], "softSkills": [], "certifications": [],
-            })
+            no_text = json.dumps(
+                {
+                    "noTextLayer": True,
+                    "summary": "",
+                    "strengths": [],
+                    "gaps": [],
+                    "skills": [],
+                    "tools": [],
+                    "softSkills": [],
+                    "certifications": [],
+                }
+            )
             async with async_session_factory() as session:
                 app_repo = ApplicationRepository(session)
                 application = await app_repo.get(application_id)
@@ -294,6 +331,8 @@ async def analyze_application(application_id: int, force: bool = False) -> None:
 
         result: dict = await asyncio.to_thread(_call_gemini, contents)
     except Exception:
+        if strict:
+            raise
         logger.exception("Analysis failed during CV processing for application %d", application_id)
         return
 
@@ -306,9 +345,21 @@ async def analyze_application(application_id: int, force: bool = False) -> None:
             app_repo = ApplicationRepository(session)
             application = await app_repo.get(application_id)
             if application:
-                await app_repo.update(application, {"match_score": score, "match_summary": full_summary})
+                from app.modules.ai.application.task_service import current_candidate
+
+                await current_candidate(session, application.candidate_id, cv_file.id, lock=True)
+                await app_repo.update(
+                    application, {"match_score": score, "match_summary": full_summary}
+                )
+                from app.modules.ai.application.task_service import complete_in_transaction
+
+                await complete_in_transaction(session, task_id, lease_token)
                 await session.commit()
-                logger.info("Analysis complete for application %d — score: %.1f", application_id, score)
+                logger.info(
+                    "Analysis complete for application %d — score: %.1f", application_id, score
+                )
         except Exception:
+            if strict:
+                raise
             await session.rollback()
             logger.exception("Analysis failed writing result for application %d", application_id)

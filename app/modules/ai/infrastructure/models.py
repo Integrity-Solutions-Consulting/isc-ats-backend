@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Identity, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Identity, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,6 +12,27 @@ from app.shared.mixins import AuditMixin, SoftDeleteMixin
 
 def _fk(target: str) -> ForeignKey:
     return ForeignKey(target, deferrable=True, initially="IMMEDIATE")
+
+
+class AiTask(Base):
+    """Transactional outbox: one task per action, entity and CV revision."""
+
+    __tablename__ = "tasks"
+    __table_args__ = (
+        UniqueConstraint("action", "entity_id", "file_id"),
+        {"schema": "ai"},
+    )
+
+    id: Mapped[int] = mapped_column(Identity(), primary_key=True)
+    action: Mapped[str] = mapped_column(String(40))
+    entity_id: Mapped[int]
+    file_id: Mapped[int] = mapped_column(ForeignKey("storage.files.id"))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    attempts: Mapped[int] = mapped_column(default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    lease_token: Mapped[str | None] = mapped_column(String(36), default=None)
+    error_code: Mapped[str | None] = mapped_column(String(40), default=None)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class CvParseJob(Base, AuditMixin, SoftDeleteMixin):
@@ -32,9 +53,7 @@ class CvParseJob(Base, AuditMixin, SoftDeleteMixin):
     model_used: Mapped[str | None] = mapped_column(String(100), default=None)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
     error_detail: Mapped[str | None] = mapped_column(Text, default=None)
-    completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class VacancyPromoImage(Base, AuditMixin, SoftDeleteMixin):

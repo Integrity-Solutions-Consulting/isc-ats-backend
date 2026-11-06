@@ -9,15 +9,16 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import select
 from fastapi import (
     File as FastAPIFile,
 )
+from sqlalchemy import select
 
 from app.core.dependencies import CurrentUserDep, SessionDep
 from app.core.rate_limit import CV_PREFILL_LIMIT, limiter
 from app.core.task_queue import TaskQueueDep, register_task
 from app.modules.ai.application.cv_parse_service import parse_candidate_cv
+from app.modules.ai.application.task_service import schedule, task_status
 from app.modules.auth.api.authorization import require_permission
 from app.modules.auth.infrastructure.models import User
 from app.modules.org.infrastructure.models import Parameter
@@ -287,6 +288,7 @@ async def get_candidate(
 async def create_candidate(
     data: CandidateCreate,
     service: ServiceDep,
+    session: SessionDep,
     current_user: CurrentUserDep,
     task_queue: TaskQueueDep,
 ) -> CandidateRead:
@@ -307,7 +309,7 @@ async def create_candidate(
     except DuplicateCandidateError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     if created.cv_file_id:
-        await task_queue.enqueue("parse_candidate_cv", created.id)
+        await schedule(session, "parse_candidate_cv", created.id, created.cv_file_id)
     return CandidateRead.model_validate(created)
 
 
@@ -329,6 +331,7 @@ async def update_candidate(
     except CandidateNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     require_owner(current_user, existing.user_id)
+    previous_cv_file_id = existing.cv_file_id
     try:
         updated = await service.update(candidate_id, data, current_user)
     except CandidateNotFoundError as exc:
@@ -337,8 +340,17 @@ async def update_candidate(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except DuplicateCandidateError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    if data.cv_file_id is not None:
-        await task_queue.enqueue("parse_candidate_cv", candidate_id)
+    if "cv_file_id" in data.model_fields_set and data.cv_file_id != previous_cv_file_id:
+        updated.parsed_data = None
+        updated.last_parsed_at = None
+        if data.cv_file_id:
+            await schedule(
+                session,
+                "parse_candidate_cv",
+                candidate_id,
+                data.cv_file_id,
+                retry=True,
+            )
         application_ids = (
             await session.scalars(
                 select(Application.id).where(
@@ -348,7 +360,17 @@ async def update_candidate(
             )
         ).all()
         for application_id in application_ids:
-            await task_queue.enqueue("analyze_application", application_id, True)
+            application = await session.get(Application, application_id)
+            application.match_score = None
+            application.match_summary = None
+            if data.cv_file_id:
+                await schedule(
+                    session,
+                    "analyze_application",
+                    application_id,
+                    data.cv_file_id,
+                    retry=True,
+                )
     return CandidateRead.model_validate(updated)
 
 
@@ -381,3 +403,49 @@ async def get_candidate_expanded(
 
 # ── Background task registration (durable queue / inline) ─────────────────────
 register_task("parse_candidate_cv", parse_candidate_cv)
+
+
+@router.get(
+    "/{candidate_id}/cv/analysis",
+    dependencies=[Depends(require_permission("recruitment.candidates.read"))],
+)
+async def cv_analysis_status(
+    candidate_id: int,
+    service: ServiceDep,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> dict:
+    try:
+        candidate = await service.get(candidate_id)
+    except CandidateNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    require_owner(current_user, candidate.user_id)
+    return await task_status(
+        session,
+        "parse_candidate_cv",
+        candidate_id,
+        candidate.cv_file_id,
+        completed=candidate.parsed_data is not None,
+    )
+
+
+@router.post(
+    "/{candidate_id}/cv/analysis",
+    status_code=202,
+    dependencies=[Depends(require_permission("recruitment.candidates.update"))],
+)
+async def retry_cv_analysis(
+    candidate_id: int,
+    service: ServiceDep,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> dict:
+    try:
+        candidate = await service.get(candidate_id)
+    except CandidateNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    require_owner(current_user, candidate.user_id)
+    if not candidate.cv_file_id:
+        raise HTTPException(422, "Primero debes cargar un CV.")
+    await schedule(session, "parse_candidate_cv", candidate_id, candidate.cv_file_id, retry=True)
+    return {"status": "pending"}

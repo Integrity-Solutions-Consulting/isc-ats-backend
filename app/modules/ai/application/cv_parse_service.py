@@ -13,20 +13,20 @@ from __future__ import annotations
 import io
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import fitz  # PyMuPDF
-from pypdf import PdfReader
 from google import genai
 from google.genai import types
+from pypdf import PdfReader
 
 import app.models_registry  # noqa: F401
 from app.core.config import settings
 from app.core.database import async_session_factory
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
-from app.modules.storage.infrastructure.models import File
 from app.modules.storage.infrastructure.minio_client import minio_client
+from app.modules.storage.infrastructure.models import File
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ _FALLBACK_MODELS = [
     "gemini-2.5-flash",
 ]
 
-_RETRYABLE_CODES = {429, 503, 500, 502, 504}
+_RETRYABLE_CODES = {404, 429, 503, 500, 502, 504}
 
 _JSON_SCHEMA = """\
 {
@@ -122,6 +122,7 @@ _FOCUSED_PROMPT = (
 
 def _normalise_parsed_data(raw: dict[str, Any]) -> dict[str, Any]:
     """Accept common model variants while keeping one generator contract."""
+
     def as_list(value: Any) -> list:
         return value if isinstance(value, list) else []
 
@@ -133,35 +134,49 @@ def _normalise_parsed_data(raw: dict[str, Any]) -> dict[str, Any]:
     for item in as_list(experiences):
         if not isinstance(item, dict):
             continue
-        normalised_experience.append({
-            "company": item.get("company") or item.get("employer") or item.get("organization") or "",
-            "role": item.get("role") or item.get("position") or item.get("job_title") or "",
-            "start_date": item.get("start_date") or item.get("start") or "",
-            "end_date": item.get("end_date") or item.get("end") or "",
-            "functions": as_list(item.get("functions") or item.get("responsibilities") or item.get("duties")),
-            "tools": as_list(item.get("tools") or item.get("technologies")),
-        })
+        normalised_experience.append(
+            {
+                "company": item.get("company")
+                or item.get("employer")
+                or item.get("organization")
+                or "",
+                "role": item.get("role") or item.get("position") or item.get("job_title") or "",
+                "start_date": item.get("start_date") or item.get("start") or "",
+                "end_date": item.get("end_date") or item.get("end") or "",
+                "functions": as_list(
+                    item.get("functions") or item.get("responsibilities") or item.get("duties")
+                ),
+                "tools": as_list(item.get("tools") or item.get("technologies")),
+            }
+        )
 
     normalised_certifications = []
     for item in as_list(certifications):
         if not isinstance(item, dict):
             continue
-        normalised_certifications.append({
-            "institution": item.get("institution") or item.get("provider") or item.get("organization") or "",
-            "name": item.get("name") or item.get("title") or item.get("course") or "",
-            "start": item.get("start") or item.get("start_date") or "",
-            "end": item.get("end") or item.get("end_date") or "",
-        })
+        normalised_certifications.append(
+            {
+                "institution": item.get("institution")
+                or item.get("provider")
+                or item.get("organization")
+                or "",
+                "name": item.get("name") or item.get("title") or item.get("course") or "",
+                "start": item.get("start") or item.get("start_date") or "",
+                "end": item.get("end") or item.get("end_date") or "",
+            }
+        )
 
     normalised_projects = []
     for item in as_list(projects):
         if not isinstance(item, dict):
             continue
-        normalised_projects.append({
-            "name": item.get("name") or item.get("title") or "",
-            "description": item.get("description") or item.get("details") or "",
-            "tools": as_list(item.get("tools") or item.get("technologies")),
-        })
+        normalised_projects.append(
+            {
+                "name": item.get("name") or item.get("title") or "",
+                "description": item.get("description") or item.get("details") or "",
+                "tools": as_list(item.get("tools") or item.get("technologies")),
+            }
+        )
 
     return {
         "experience": normalised_experience,
@@ -195,7 +210,9 @@ def _build_text_contents(cv_text: str) -> list[Any]:
 
 
 def _build_image_contents(images: list[bytes]) -> list[Any]:
-    parts: list[Any] = [_PROMPT_HEADER + _JSON_SCHEMA + "\n\n## CV del candidato (páginas como imágenes)\n"]
+    parts: list[Any] = [
+        _PROMPT_HEADER + _JSON_SCHEMA + "\n\n## CV del candidato (páginas como imágenes)\n"
+    ]
     for img_bytes in images:
         parts.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
     return parts
@@ -206,7 +223,8 @@ def _build_hybrid_contents(cv_text: str, images: list[bytes]) -> list[Any]:
     parts: list[Any] = [
         _PROMPT_HEADER
         + _JSON_SCHEMA
-        + f"\n\n## Texto extraído (puede tener columnas desordenadas)\n<CV>\n{cv_text[:14000]}\n</CV>\n"
+        + "\n\n## Texto extraído (puede tener columnas desordenadas)\n"
+        + f"<CV>\n{cv_text[:14000]}\n</CV>\n"
         + "\n## Imágenes originales de las páginas\n"
     ]
     parts.extend(types.Part.from_bytes(data=image, mime_type="image/png") for image in images)
@@ -237,7 +255,9 @@ def _call_gemini(contents: list[Any]) -> dict:
             return _normalise_parsed_data(json.loads(response.text))
         except Exception as exc:
             status_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-            retryable = status_code in _RETRYABLE_CODES or any(str(c) in str(exc) for c in _RETRYABLE_CODES)
+            retryable = status_code in _RETRYABLE_CODES or any(
+                str(c) in str(exc) for c in _RETRYABLE_CODES
+            )
             logger.warning("Model %s failed (%s) — %s", model, status_code, exc)
             last_exc = exc
             if not retryable:
@@ -263,8 +283,12 @@ def _parse_comprehensively(pdf_bytes: bytes) -> dict[str, Any]:
     """Run text+visual extraction and a focused recovery pass."""
     cv_text = _extract_text(pdf_bytes)
     images = _pdf_to_images(pdf_bytes)
-    primary_contents = _build_hybrid_contents(cv_text, images) if images else _build_text_contents(cv_text)
-    focused_contents = _build_focused_contents(cv_text, images) if images else _build_text_contents(cv_text)
+    primary_contents = (
+        _build_hybrid_contents(cv_text, images) if images else _build_text_contents(cv_text)
+    )
+    focused_contents = (
+        _build_focused_contents(cv_text, images) if images else _build_text_contents(cv_text)
+    )
     primary = _call_gemini(primary_contents)
     focused = _call_gemini(focused_contents)
     return _merge_parsed_data(primary, focused)
@@ -280,7 +304,14 @@ def _download_cv(bucket: str, stored_key: str) -> bytes:
         obj.release_conn()
 
 
-async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
+async def parse_candidate_cv(
+    candidate_id: int,
+    *,
+    strict: bool = False,
+    expected_file_id: int | None = None,
+    task_id: int | None = None,
+    lease_token: str | None = None,
+) -> dict[str, Any] | None:
     """Parse a candidate's CV and store the result in candidate.parsed_data.
 
     Splits into three phases to keep the DB session closed during blocking I/O
@@ -289,6 +320,8 @@ async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
     import asyncio
 
     if not settings.gemini_api_key:
+        if strict:
+            raise ValueError("Gemini is not configured")
         logger.warning("GEMINI_API_KEY not set — skipping CV parse for candidate %d", candidate_id)
         return None
 
@@ -296,17 +329,24 @@ async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
     async with async_session_factory() as session:
         try:
             candidate: Candidate | None = await session.get(Candidate, candidate_id)
+            if strict:
+                from app.modules.ai.application.task_service import current_candidate
+
+                candidate = await current_candidate(session, candidate_id, expected_file_id)
             if not candidate or not candidate.cv_file_id:
                 logger.info("Candidate %d has no CV — skipping parse", candidate_id)
                 return None
             cv_file: File | None = await session.get(File, candidate.cv_file_id)
             if not cv_file:
+                if strict:
+                    raise ValueError("CV file not found")
                 return None
             bucket, stored_key = cv_file.bucket, cv_file.stored_key
         except Exception:
+            if strict:
+                raise
             logger.exception("CV parse failed reading DB for candidate %d", candidate_id)
             return None
-
 
     # ── Phase 2: blocking I/O + AI call — session closed ────────────────────
     try:
@@ -314,20 +354,29 @@ async def parse_candidate_cv(candidate_id: int) -> dict[str, Any] | None:
 
         result: dict[str, Any] = await asyncio.to_thread(_parse_comprehensively, pdf_bytes)
     except Exception:
+        if strict:
+            raise
         logger.exception("CV parse failed during processing for candidate %d", candidate_id)
         return None
 
     # ── Phase 3: write result — fresh session ────────────────────────────────
     async with async_session_factory() as session:
         try:
-            candidate = await session.get(Candidate, candidate_id)
+            from app.modules.ai.application.task_service import current_candidate
+
+            candidate = await current_candidate(session, candidate_id, cv_file.id, lock=True)
             if candidate:
                 candidate.parsed_data = result
-                candidate.last_parsed_at = datetime.now(timezone.utc)
+                candidate.last_parsed_at = datetime.now(UTC)
+                from app.modules.ai.application.task_service import complete_in_transaction
+
+                await complete_in_transaction(session, task_id, lease_token)
                 await session.commit()
                 logger.info("CV parse complete for candidate %d", candidate_id)
             return result
         except Exception:
+            if strict:
+                raise
             await session.rollback()
             logger.exception("CV parse failed writing result for candidate %d", candidate_id)
             return None
