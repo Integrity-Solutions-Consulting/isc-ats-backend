@@ -38,14 +38,12 @@ logger = logging.getLogger(__name__)
 # Models tried in order — first success wins.
 _FALLBACK_MODELS = [
     "gemini-3.8-flash",
-    "gemini-2.5-flash",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
-    "gemini-3.1-flash-preview",
 ]
 
 # Errors that warrant trying the next model.
-_RETRYABLE_CODES = {429, 503, 500, 502, 504}
+_RETRYABLE_CODES = {404, 429, 503, 500, 502, 504}
 
 _REQUIREMENTS_BLOCK = """\
 ## Requisitos de la vacante
@@ -184,7 +182,7 @@ def _call_gemini(contents: list[Any]) -> dict:
             logger.warning("Model %s failed (%s) — %s", model, status_code, exc)
             last_exc = exc
             if not retryable:
-                break  # non-retryable error (e.g. 404 model not found), skip to next
+                break  # Authentication and invalid requests need configuration fixes.
 
     raise RuntimeError(f"All models failed. Last error: {last_exc}") from last_exc
 
