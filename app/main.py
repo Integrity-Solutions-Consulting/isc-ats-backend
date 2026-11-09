@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,7 @@ from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.core.task_queue import InlineTaskQueue, build_task_queue
 from app.core.token_denylist import InMemoryTokenDenylist, build_token_denylist
 from app.core.validation_errors import register_validation_error_handler
+from app.modules.ai.application.task_service import dispatch_loop
 from app.modules.storage.infrastructure.minio_client import init_minio
 
 
@@ -26,11 +28,15 @@ async def lifespan(app: FastAPI):
     arq_pool = None
     denylist_redis = None
     if settings.queue_backend == "arq":
-        from arq import create_pool
-        from arq.connections import RedisSettings
+        from arq.connections import ArqRedis
         from redis.asyncio import Redis
 
-        arq_pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+        # Connect lazily: an unavailable task queue must not block API startup.
+        arq_pool = ArqRedis.from_url(
+            settings.redis_url,
+            socket_connect_timeout=3,
+            socket_timeout=5,
+        )
         # Separate plain-Redis client: the denylist is read on every authenticated
         # request, independent of the arq job pool. The login throttle shares it.
         denylist_redis = Redis.from_url(settings.redis_url)
@@ -38,9 +44,13 @@ async def lifespan(app: FastAPI):
     app.state.token_denylist = build_token_denylist(denylist_redis)
     app.state.login_throttle = build_login_throttle(denylist_redis)
 
+    dispatcher = asyncio.create_task(dispatch_loop(app.state.task_queue))
     try:
         yield
     finally:
+        dispatcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await dispatcher
         if arq_pool is not None:
             await arq_pool.close()
         if denylist_redis is not None:

@@ -10,6 +10,7 @@ from app.core.database import async_session_factory
 from app.core.dependencies import CurrentUser, CurrentUserDep, SessionDep
 from app.core.task_queue import TaskQueueDep, register_task
 from app.modules.ai.application.analysis_service import analyze_application
+from app.modules.ai.application.task_service import schedule_application, task_status
 from app.modules.ai.application.word_generator_service import generate_profile_word
 from app.modules.auth.api.authorization import require_permission
 from app.modules.auth.infrastructure.models import User
@@ -109,9 +110,7 @@ async def _notify_stage_change(application_id: int, new_stage_id: int) -> None:
             application = await BaseRepository(session, Application).get(application_id)
             if application is None:
                 return
-            candidate = await BaseRepository(session, Candidate).get(
-                application.candidate_id
-            )
+            candidate = await BaseRepository(session, Candidate).get(application.candidate_id)
             if candidate is None:
                 return
             user = await BaseRepository(session, User).get(candidate.user_id)
@@ -147,10 +146,7 @@ async def _notify_stage_change(application_id: int, new_stage_id: int) -> None:
                 Notification(
                     recipient_id=user.id,
                     title="Tu postulación avanzó de etapa",
-                    body=(
-                        f"Tu postulación para {vn} ahora se encuentra "
-                        f"en la etapa: {sn}."
-                    ),
+                    body=(f"Tu postulación para {vn} ahora se encuentra en la etapa: {sn}."),
                     related_entity_type="application",
                     related_entity_id=application.id,
                     created_by=None,
@@ -158,9 +154,7 @@ async def _notify_stage_change(application_id: int, new_stage_id: int) -> None:
             )
             await session.commit()
         except Exception:
-            logger.exception(
-                "Failed to notify stage change for application %s", application_id
-            )
+            logger.exception("Failed to notify stage change for application %s", application_id)
             await session.rollback()
 
 
@@ -178,9 +172,7 @@ async def _notify_rejection(application_id: int) -> None:
             application = await BaseRepository(session, Application).get(application_id)
             if application is None:
                 return
-            candidate = await BaseRepository(session, Candidate).get(
-                application.candidate_id
-            )
+            candidate = await BaseRepository(session, Candidate).get(application.candidate_id)
             if candidate is None:
                 return
             user = await BaseRepository(session, User).get(candidate.user_id)
@@ -225,9 +217,7 @@ async def _notify_rejection(application_id: int) -> None:
             )
             await session.commit()
         except Exception:
-            logger.exception(
-                "Failed to notify rejection for application %s", application_id
-            )
+            logger.exception("Failed to notify rejection for application %s", application_id)
             await session.rollback()
 
 
@@ -305,7 +295,7 @@ async def create_application(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except DuplicateApplicationError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    await task_queue.enqueue("analyze_application", created.id)
+    await schedule_application(session, created)
     return ApplicationRead.model_validate(created)
 
 
@@ -340,9 +330,7 @@ async def update_application(
     if updated.current_stage_id != old_stage_id:
         if updated.current_stage_id is not None:
             # Forward move — email + in-app notification about the new stage.
-            await task_queue.enqueue(
-                "notify_stage_change", updated.id, updated.current_stage_id
-            )
+            await task_queue.enqueue("notify_stage_change", updated.id, updated.current_stage_id)
         elif old_stage_id is not None:
             # Rejection (stage set to None) — professional email + in-app notification.
             await task_queue.enqueue("notify_rejection", updated.id)
@@ -368,7 +356,9 @@ async def generate_profile(
         doc_bytes = await generate_profile_word(application_id)
     except Exception as exc:
         logger.exception("Failed to generate profile document for application %s", application_id)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Error generando el perfil") from exc
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "Error generando el perfil"
+        ) from exc
 
     # ── Register the generated document in storage + application_documents ────
     try:
@@ -425,17 +415,19 @@ async def generate_profile(
 async def trigger_analysis(
     application_id: int,
     service: ServiceDep,
+    session: SessionDep,
     task_queue: TaskQueueDep,
     force: Annotated[bool, Query()] = False,
 ) -> dict:
     try:
-        await service.get(application_id)
+        application = await service.get(application_id)
     except ApplicationNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     # Idempotent by default: an already-scored application is skipped downstream
     # so the profile-entry safety net never re-spends Gemini. force=True re-runs it.
-    await task_queue.enqueue("analyze_application", application_id, force)
-    return {"status": "queued"}
+    if force or application.match_score is None:
+        await schedule_application(session, application, retry=True)
+    return {"status": "pending" if force or application.match_score is None else "completed"}
 
 
 @router.delete(
@@ -454,3 +446,28 @@ async def delete_application(application_id: int, service: ServiceDep) -> None:
 register_task("analyze_application", analyze_application)
 register_task("notify_stage_change", _notify_stage_change)
 register_task("notify_rejection", _notify_rejection)
+
+
+@router.get(
+    "/{application_id}/analysis-status",
+    dependencies=[Depends(require_permission("recruitment.applications.read"))],
+)
+async def application_analysis_status(
+    application_id: int,
+    service: ServiceDep,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> dict:
+    try:
+        application = await service.get(application_id)
+    except ApplicationNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    await _require_candidate_owner(session, current_user, application.candidate_id)
+    candidate = await session.get(Candidate, application.candidate_id)
+    return await task_status(
+        session,
+        "analyze_application",
+        application_id,
+        candidate.cv_file_id if candidate else None,
+        completed=application.match_score is not None,
+    )

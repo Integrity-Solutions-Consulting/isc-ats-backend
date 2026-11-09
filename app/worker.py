@@ -51,3 +51,6 @@ class WorkerSettings:
 
     functions = build_arq_functions()
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
+    # Durable AI jobs manage their own delayed retries in SQL. Let the wrapper
+    # finish its 240-second timeout and persist the outcome before Arq intervenes.
+    job_timeout = 270
