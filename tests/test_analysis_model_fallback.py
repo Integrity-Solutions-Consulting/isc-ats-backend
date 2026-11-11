@@ -18,6 +18,8 @@ class AnalysisModelFallbackTests(unittest.TestCase):
         generate = Mock(side_effect=outcomes)
         client = SimpleNamespace(models=SimpleNamespace(generate_content=generate))
         with (
+            patch.object(analysis_service.settings, "gemini_api_key", "test-key"),
+            patch.object(analysis_service.settings, "openrouter_api_key", ""),
             patch.object(analysis_service.genai, "Client", return_value=client),
             patch.object(analysis_service, "_FALLBACK_MODELS", ["first", "second"]),
         ):
