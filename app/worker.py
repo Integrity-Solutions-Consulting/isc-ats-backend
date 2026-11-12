@@ -23,6 +23,7 @@ from arq.connections import RedisSettings
 # in-process inline queue therefore share the exact same task catalog.
 import app.api_router  # noqa: F401
 from app.core.config import settings
+from app.core.structured_logging import configure_app_logging
 from app.core.task_queue import _REGISTRY, TaskFunc
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,14 @@ def _as_arq_function(name: str, fn: TaskFunc) -> Any:
     """Adapt a `(*args)` task coroutine into an Arq `(ctx, *args)` job function."""
 
     async def _runner(ctx: dict[str, Any], *args: Any) -> None:
-        await fn(*args)
+        logger.info("Trabajo iniciado", extra={"action": name})
+        try:
+            await fn(*args)
+        except Exception:
+            logger.exception("Trabajo fallido", extra={"action": name})
+            raise
+        else:
+            logger.info("Trabajo finalizado", extra={"action": name})
 
     _runner.__name__ = name
     return arq_func(_runner, name=name, max_tries=_DEFAULT_MAX_TRIES)
@@ -46,10 +54,16 @@ def build_arq_functions() -> list[Any]:
     return [_as_arq_function(name, fn) for name, fn in _REGISTRY.items()]
 
 
+async def worker_startup(ctx: dict[str, Any]) -> None:
+    configure_app_logging()
+    logger.info("Worker iniciado")
+
+
 class WorkerSettings:
     """Arq worker configuration."""
 
     functions = build_arq_functions()
+    on_startup = worker_startup
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     # Durable AI jobs manage their own delayed retries in SQL. Let the wrapper
     # finish its 240-second timeout and persist the outcome before Arq intervenes.

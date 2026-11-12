@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.modules.ai.infrastructure.usage_tracking import Attempt, track_attempt
 
 
 class OpenRouterError(RuntimeError):
@@ -18,6 +19,11 @@ class OpenRouterError(RuntimeError):
 def call_openrouter(contents: list[Any]) -> dict:
     if not settings.openrouter_api_key:
         raise ValueError("OpenRouter is not configured")
+    with track_attempt(settings.openrouter_model) as attempt:
+        return _call_openrouter(contents, attempt)
+
+
+def _call_openrouter(contents: list[Any], attempt: Attempt) -> dict:
     parts = []
     for part in contents:
         if isinstance(part, str):
@@ -52,6 +58,9 @@ def call_openrouter(contents: list[Any]) -> dict:
         # Do not log upstream bodies, CV content, or credentials.
         raise OpenRouterError(response.status_code)
     payload = response.json()
+    usage = payload.get("usage") or {}
+    attempt.input_tokens = usage.get("prompt_tokens")
+    attempt.output_tokens = usage.get("completion_tokens")
     if payload.get("error"):
         raise OpenRouterError(int(payload["error"].get("code", 502)))
     choice = payload["choices"][0]

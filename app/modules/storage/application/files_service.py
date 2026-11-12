@@ -2,6 +2,7 @@ from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.core.dependencies import CurrentUser
+from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.storage.api.files_schemas import FileCreate, FileUpdate
 from app.modules.storage.infrastructure.models import File
 from app.shared.pagination import PageParams
@@ -60,9 +61,8 @@ class FileService:
     ) -> bool:
         """True when one more CV of `new_bytes` would breach the caller's quota.
 
-        Counts only the user's own ACTIVE CV files and bounds both their number and
-        their total size, so a candidate can't exhaust storage by uploading many
-        large PDFs — a defense per-IP rate limiting can't provide against IP rotation.
+        The currently linked CV is excluded to reserve room for its replacement.
+        Unlinked uploads still count, preventing unlimited abandoned uploads.
         """
         stmt = select(
             func.count(File.id),
@@ -71,6 +71,13 @@ class FileService:
             File.entity_type == "cv",
             File.created_by == user_id,
             File.is_active.is_(True),
+            File.id.not_in(
+                select(Candidate.cv_file_id).where(
+                    Candidate.user_id == user_id,
+                    Candidate.is_active.is_(True),
+                    Candidate.cv_file_id.is_not(None),
+                )
+            ),
         )
         count, total = (await self.repository.session.execute(stmt)).one()
         return (count + 1) > max_count or (int(total) + new_bytes) > max_total_bytes

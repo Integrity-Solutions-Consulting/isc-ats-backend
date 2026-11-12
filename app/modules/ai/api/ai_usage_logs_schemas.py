@@ -21,6 +21,11 @@ class AiUsageLogRead(BaseModel):
     input_tokens: int | None
     output_tokens: int | None
     cost_usd: Decimal | None
+    status: str | None = None
+    error_code: str | None = None
+    duration_ms: int | None = None
+    task_id: int | None = None
+    entity_id: int | None = None
     is_active: bool
     created_at: datetime
     created_by: int | None

@@ -37,7 +37,11 @@ from app.modules.recruitment.application.candidates_service import (
     CandidateService,
     DuplicateCandidateError,
 )
-from app.modules.recruitment.infrastructure.application_models import Application
+from app.modules.recruitment.infrastructure.application_models import (
+    Application,
+    ApplicationDocument,
+)
+from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.recruitment.infrastructure.candidates_expanded import (
     CandidatesExpandedRepository,
 )
@@ -371,6 +375,28 @@ async def update_candidate(
                     data.cv_file_id,
                     retry=True,
                 )
+        if data.cv_file_id and previous_cv_file_id:
+            # Retire the old file in the same transaction as linking its replacement.
+            # Preserve files still referenced by another candidate or a document.
+            still_used = await session.scalar(
+                select(Candidate.id).where(
+                    ((Candidate.id != candidate_id) & (Candidate.cv_file_id == previous_cv_file_id))
+                    | (Candidate.avatar_file_id == previous_cv_file_id),
+                    Candidate.is_active.is_(True),
+                ).limit(1)
+            )
+            document_uses_file = await session.scalar(
+                select(ApplicationDocument.id).where(
+                    ApplicationDocument.file_id == previous_cv_file_id,
+                    ApplicationDocument.is_active.is_(True),
+                ).limit(1)
+            )
+            if not still_used and not document_uses_file:
+                previous_file = await session.get(File, previous_cv_file_id)
+                if previous_file and previous_file.entity_type == "cv":
+                    previous_file.is_active = False
+                    previous_file.updated_by = current_user.user_id
+                    previous_file.ip_updated = current_user.ip
     return CandidateRead.model_validate(updated)
 
 
