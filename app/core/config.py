@@ -80,6 +80,8 @@ class Settings(BaseSettings):
 
     # AI / LLM
     gemini_api_key: str = ""
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openai/gpt-4.1-mini"
     anthropic_api_key: str = ""
 
     # Email

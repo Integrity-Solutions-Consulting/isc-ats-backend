@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.models_registry  # noqa: F401
 from app.core.config import settings
+from app.modules.ai.application.openrouter_client import call_openrouter
 from app.modules.org.infrastructure.models import Parameter
 from app.modules.storage.infrastructure.minio_client import minio_client
 from app.modules.storage.infrastructure.models import File
@@ -148,6 +149,8 @@ def _build_image_contents(images: list[bytes]) -> list[Any]:
 
 
 def _call_gemini(contents: list[Any]) -> dict:
+    if not settings.gemini_api_key:
+        return call_openrouter(contents)
     client = genai.Client(api_key=settings.gemini_api_key)
     last_exc: Exception | None = None
     for model in _FALLBACK_MODELS:
@@ -165,6 +168,9 @@ def _call_gemini(contents: list[Any]) -> dict:
             last_exc = exc
             if not retryable:
                 break
+    if settings.openrouter_api_key:
+        logger.warning("Gemini unavailable; switching to OpenRouter")
+        return call_openrouter(contents)
     raise RuntimeError(f"All prefill models failed. Last error: {last_exc}") from last_exc
 
 
@@ -213,13 +219,13 @@ async def prefill_from_bytes(pdf_bytes: bytes, session: AsyncSession) -> dict:
     The PDF is processed entirely in memory — nothing is persisted. This is the
     path used by onboarding so a candidate's CV is never stored until they
     finish registration (LOPDP data-minimisation). Returns an empty dict when
-    Gemini is not configured or any unrecoverable error occurs — callers should
+    No AI provider is configured or any unrecoverable error occurs — callers should
     handle the empty case gracefully rather than failing the onboarding flow.
     """
     import asyncio
 
-    if not settings.gemini_api_key:
-        logger.warning("GEMINI_API_KEY not set — skipping CV prefill")
+    if not (settings.gemini_api_key or settings.openrouter_api_key):
+        logger.warning("No AI API key set — skipping CV prefill")
         return {}
 
     # ── AI extraction (blocking I/O + AI call run in threads) ────────────────

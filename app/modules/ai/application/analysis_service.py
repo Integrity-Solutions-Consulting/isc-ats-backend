@@ -26,6 +26,7 @@ from pypdf import PdfReader
 import app.models_registry  # noqa: F401 — ensures all FK targets are registered
 from app.core.config import settings
 from app.core.database import async_session_factory
+from app.modules.ai.application.openrouter_client import call_openrouter
 from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.applications_repository import ApplicationRepository
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
@@ -37,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 # Models tried in order — first success wins.
 _FALLBACK_MODELS = [
-    "gemini-3.8-flash",
     "gemini-3.1-flash-lite",
+    "gemini-3.8-flash",
     "gemini-3.5-flash",
 ]
 
@@ -160,6 +161,8 @@ def _build_image_contents(images: list[bytes], vacancy: Vacancy) -> list[Any]:
 
 def _call_gemini(contents: list[Any]) -> dict:
     """Try each model in the fallback chain; raise on total failure."""
+    if not settings.gemini_api_key:
+        return call_openrouter(contents)
     client = genai.Client(api_key=settings.gemini_api_key)
     last_exc: Exception | None = None
 
@@ -183,6 +186,9 @@ def _call_gemini(contents: list[Any]) -> dict:
             if not retryable:
                 break  # Authentication and invalid requests need configuration fixes.
 
+    if settings.openrouter_api_key:
+        logger.warning("Gemini unavailable; switching to OpenRouter")
+        return call_openrouter(contents)
     raise RuntimeError(f"All models failed. Last error: {last_exc}") from last_exc
 
 
@@ -241,11 +247,11 @@ async def analyze_application(
     """
     import asyncio
 
-    if not settings.gemini_api_key:
+    if not (settings.gemini_api_key or settings.openrouter_api_key):
         if strict:
-            raise ValueError("Gemini is not configured")
+            raise ValueError("No AI provider is configured")
         logger.warning(
-            "GEMINI_API_KEY not set — skipping analysis for application %d", application_id
+            "No AI API key set — skipping analysis for application %d", application_id
         )
         return
 
