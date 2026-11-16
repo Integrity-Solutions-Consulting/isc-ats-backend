@@ -97,7 +97,7 @@ async def list_candidates_directory(
     service: ServiceDep,
     current_user: CurrentUserDep,
     page: Annotated[int, Query(ge=1)] = 1,
-    size: Annotated[int, Query(ge=1, le=100)] = 20,
+    size: Annotated[int, Query(ge=1, le=1000)] = 20,
     search: Annotated[
         str | None,
         Query(description="Búsqueda por nombre, apellido, correo o cédula del candidato"),

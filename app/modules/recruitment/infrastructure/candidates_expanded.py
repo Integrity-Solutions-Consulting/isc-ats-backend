@@ -281,6 +281,9 @@ class CandidatesExpandedRepository:
 
         app_stmt = (
             select(
+                Application.id.label("application_id"),
+                Application.applied_at,
+                Application.salary_expectation,
                 Application.candidate_id,
                 Application.vacancy_id,
                 VacNameParam.name.label("vacancy_title"),
@@ -302,6 +305,9 @@ class CandidatesExpandedRepository:
         for ar in app_rows:
             apps_by_candidate.setdefault(ar.candidate_id, []).append(
                 CandidateAppliedVacancy(
+                    application_id=ar.application_id,
+                    applied_at=ar.applied_at,
+                    salary_expectation=ar.salary_expectation,
                     id=ar.vacancy_id,
                     title=ar.vacancy_title or "Sin título",
                     status=ar.status,

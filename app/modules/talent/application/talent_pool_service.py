@@ -6,6 +6,7 @@ from sqlalchemy.orm import aliased
 from app.core.dependencies import CurrentUser
 from app.modules.auth.infrastructure.models import User
 from app.modules.org.infrastructure.models import Parameter
+from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.recruitment.infrastructure.models import Vacancy
 from app.modules.talent.api.talent_pool_schemas import TalentPoolCreate, TalentPoolRead
@@ -44,8 +45,24 @@ class TalentPoolService:
         UniP = aliased(Parameter, name="uni_p")
         VacNameP = aliased(Parameter, name="vac_name_p")
 
+        # Same candidate/vacancy score the list previously resolved by loading
+        # every application: last non-null score in ascending application id.
+        match_score = (
+            select(Application.match_score)
+            .where(
+                Application.candidate_id == TalentPool.candidate_id,
+                Application.vacancy_id == TalentPool.source_vacancy_id,
+                Application.match_score.isnot(None),
+            )
+            .order_by(Application.id.desc())
+            .limit(1)
+            .correlate(TalentPool)
+            .scalar_subquery()
+        )
+
         return (
             select(
+                match_score.label("match_score"),
                 TalentPool.id,
                 TalentPool.candidate_id,
                 TalentPool.source_vacancy_id,
@@ -87,6 +104,7 @@ class TalentPoolService:
             candidate_id=row.candidate_id,
             source_vacancy_id=row.source_vacancy_id,
             source_vacancy_title=row.source_vacancy_title,
+            match_score=row.match_score,
             is_active=row.is_active,
             created_at=row.created_at,
             created_by=row.created_by,
