@@ -80,9 +80,16 @@ class Settings(BaseSettings):
 
     # AI / LLM
     gemini_api_key: str = ""
+    omniroute_base_url: str = ""
+    omniroute_api_key: str = ""
+    omniroute_model: str = ""
     openrouter_api_key: str = ""
     openrouter_model: str = "openai/gpt-4.1-mini"
     anthropic_api_key: str = ""
+
+    @property
+    def omniroute_configured(self) -> bool:
+        return bool(self.omniroute_base_url and self.omniroute_api_key and self.omniroute_model)
 
     # Email
     # Active transport: "smtp" (Gmail today) or "resend" (future — requires a

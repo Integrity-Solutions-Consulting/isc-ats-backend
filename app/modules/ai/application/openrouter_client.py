@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.modules.ai.infrastructure.usage_tracking import Attempt, track_attempt
 
 
 class OpenRouterError(RuntimeError):
@@ -18,6 +19,30 @@ class OpenRouterError(RuntimeError):
 def call_openrouter(contents: list[Any]) -> dict:
     if not settings.openrouter_api_key:
         raise ValueError("OpenRouter is not configured")
+    with track_attempt(settings.openrouter_model, provider="openrouter") as attempt:
+        return _call_openrouter(contents, attempt)
+
+
+def call_omniroute(contents: list[Any]) -> dict:
+    if not settings.omniroute_configured:
+        raise ValueError("OmniRoute is not configured")
+    with track_attempt(settings.omniroute_model, provider="omniroute") as attempt:
+        return _call_openrouter(
+            contents, attempt,
+            url=f"{settings.omniroute_base_url.rstrip('/')}/chat/completions",
+            api_key=settings.omniroute_api_key,
+            model=settings.omniroute_model,
+        )
+
+
+def _call_openrouter(
+    contents: list[Any],
+    attempt: Attempt,
+    *,
+    url: str = "https://openrouter.ai/api/v1/chat/completions",
+    api_key: str | None = None,
+    model: str | None = None,
+) -> dict:
     parts = []
     for part in contents:
         if isinstance(part, str):
@@ -37,12 +62,14 @@ def call_openrouter(contents: list[Any]) -> dict:
             )
         else:
             raise ValueError("Unsupported OpenRouter prompt part")
+    api_key = api_key if api_key is not None else settings.openrouter_api_key
     with httpx.Client(timeout=60.0) as client:
         response = client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "model": settings.openrouter_model,
+                "model": model if model is not None else settings.openrouter_model,
+                "stream": False,
                 "max_tokens": 8192,
                 "messages": [{"role": "user", "content": parts}],
                 "response_format": {"type": "json_object"},
@@ -52,6 +79,9 @@ def call_openrouter(contents: list[Any]) -> dict:
         # Do not log upstream bodies, CV content, or credentials.
         raise OpenRouterError(response.status_code)
     payload = response.json()
+    usage = payload.get("usage") or {}
+    attempt.input_tokens = usage.get("prompt_tokens")
+    attempt.output_tokens = usage.get("completion_tokens")
     if payload.get("error"):
         raise OpenRouterError(int(payload["error"].get("code", 502)))
     choice = payload["choices"][0]

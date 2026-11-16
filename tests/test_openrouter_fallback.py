@@ -15,6 +15,11 @@ from app.modules.ai.application import (
 from app.modules.ai.application.task_service import failure_policy
 
 
+@pytest.fixture(autouse=True)
+def disable_omniroute(monkeypatch):
+    monkeypatch.setattr(settings, "omniroute_base_url", "")
+
+
 @pytest.mark.parametrize("service", [analysis_service, cv_parse_service, cv_prefill_service])
 @pytest.mark.parametrize("gemini_key", ["test", ""])
 def test_provider_fallback(service, gemini_key, monkeypatch):

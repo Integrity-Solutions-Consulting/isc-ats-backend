@@ -26,7 +26,8 @@ from pypdf import PdfReader
 import app.models_registry  # noqa: F401 — ensures all FK targets are registered
 from app.core.config import settings
 from app.core.database import async_session_factory
-from app.modules.ai.application.openrouter_client import call_openrouter
+from app.modules.ai.application.openrouter_client import call_omniroute, call_openrouter
+from app.modules.ai.infrastructure.usage_tracking import track_attempt, tracked_to_thread
 from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.applications_repository import ApplicationRepository
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
@@ -161,6 +162,13 @@ def _build_image_contents(images: list[bytes], vacancy: Vacancy) -> list[Any]:
 
 def _call_gemini(contents: list[Any]) -> dict:
     """Try each model in the fallback chain; raise on total failure."""
+    if settings.omniroute_configured:
+        try:
+            return call_omniroute(contents)
+        except Exception:
+            logger.warning("OmniRoute unavailable; switching to configured backup")
+            if not (settings.gemini_api_key or settings.openrouter_api_key):
+                raise
     if not settings.gemini_api_key:
         return call_openrouter(contents)
     client = genai.Client(api_key=settings.gemini_api_key)
@@ -168,20 +176,24 @@ def _call_gemini(contents: list[Any]) -> dict:
 
     for model in _FALLBACK_MODELS:
         try:
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                ),
-            )
-            return json.loads(response.text)
+            with track_attempt(model) as attempt:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                    ),
+                )
+                usage = getattr(response, "usage_metadata", None)
+                attempt.input_tokens = getattr(usage, "prompt_token_count", None)
+                attempt.output_tokens = getattr(usage, "candidates_token_count", None)
+                return json.loads(response.text)
         except Exception as exc:
             status_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
             retryable = status_code in _RETRYABLE_CODES or any(
                 str(c) in str(exc) for c in _RETRYABLE_CODES
             )
-            logger.warning("Model %s failed (%s) — %s", model, status_code, exc)
+            logger.warning("Model %s failed code=%s", model, status_code)
             last_exc = exc
             if not retryable:
                 break  # Authentication and invalid requests need configuration fixes.
@@ -247,7 +259,9 @@ async def analyze_application(
     """
     import asyncio
 
-    if not (settings.gemini_api_key or settings.openrouter_api_key):
+    if not (
+        settings.gemini_api_key or settings.openrouter_api_key or settings.omniroute_configured
+    ):
         if strict:
             raise ValueError("No AI provider is configured")
         logger.warning(
@@ -335,7 +349,10 @@ async def analyze_application(
                     await session.commit()
             return
 
-        result: dict = await asyncio.to_thread(_call_gemini, contents)
+        result: dict = await tracked_to_thread(
+            _call_gemini, contents, action="analyze_application",
+            task_id=task_id, entity_id=application_id,
+        )
     except Exception:
         if strict:
             raise
