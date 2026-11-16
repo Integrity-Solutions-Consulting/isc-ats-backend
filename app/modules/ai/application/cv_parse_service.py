@@ -24,7 +24,7 @@ from pypdf import PdfReader
 import app.models_registry  # noqa: F401
 from app.core.config import settings
 from app.core.database import async_session_factory
-from app.modules.ai.application.openrouter_client import call_openrouter
+from app.modules.ai.application.openrouter_client import call_omniroute, call_openrouter
 from app.modules.ai.infrastructure.usage_tracking import track_attempt, tracked_to_thread
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.storage.infrastructure.minio_client import minio_client
@@ -245,6 +245,13 @@ def _build_focused_contents(cv_text: str, images: list[bytes]) -> list[Any]:
 
 
 def _call_gemini(contents: list[Any]) -> dict:
+    if settings.omniroute_configured:
+        try:
+            return _normalise_parsed_data(call_omniroute(contents))
+        except Exception:
+            logger.warning("OmniRoute unavailable; switching to configured backup")
+            if not (settings.gemini_api_key or settings.openrouter_api_key):
+                raise
     if not settings.gemini_api_key:
         return _normalise_parsed_data(call_openrouter(contents))
     client = genai.Client(api_key=settings.gemini_api_key)
@@ -330,7 +337,9 @@ async def parse_candidate_cv(
     """
     import asyncio
 
-    if not (settings.gemini_api_key or settings.openrouter_api_key):
+    if not (
+        settings.gemini_api_key or settings.openrouter_api_key or settings.omniroute_configured
+    ):
         if strict:
             raise ValueError("No AI provider is configured")
         logger.warning("No AI API key set — skipping CV parse for candidate %d", candidate_id)
@@ -399,7 +408,9 @@ async def parse_candidate_cv(
 async def parse_cv_bytes(pdf_bytes: bytes) -> dict[str, Any] | None:
     """Parse a CV without requiring a persisted candidate or storing results."""
 
-    if not (settings.gemini_api_key or settings.openrouter_api_key):
+    if not (
+        settings.gemini_api_key or settings.openrouter_api_key or settings.omniroute_configured
+    ):
         logger.warning("No AI API key set — skipping direct CV parse")
         return None
 

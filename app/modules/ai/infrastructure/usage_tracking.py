@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 _observer: contextvars.ContextVar[Callable[[dict[str, Any]], None] | None] = (
     contextvars.ContextVar("ai_usage_observer", default=None)
 )
+_context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "ai_usage_context", default=None
+)
 
 
 @dataclass
@@ -25,10 +28,14 @@ class Attempt:
 
 
 @contextmanager
-def track_attempt(model: str) -> Iterator[Attempt]:
+def track_attempt(model: str, *, provider: str = "gemini") -> Iterator[Attempt]:
     start = time.monotonic()
     attempt = Attempt()
     code = None
+    logger.info("Intento de proveedor de IA iniciado", extra={
+        **(_context.get() or {}), "event": "ai_provider_started",
+        "provider": provider, "model": model,
+    })
     try:
         yield attempt
     except Exception as exc:
@@ -37,15 +44,18 @@ def track_attempt(model: str) -> Iterator[Attempt]:
         raise
     finally:
         values = {
-            "model": model, "status": "error" if code else "success", "error_code": code,
+            "provider": provider, "model": model,
+            "status": "error" if code else "success", "error_code": code,
             "duration_ms": round((time.monotonic() - start) * 1000),
             "input_tokens": attempt.input_tokens, "output_tokens": attempt.output_tokens,
         }
-        logger.info("AI provider attempt model=%s status=%s error_code=%s duration_ms=%s",
-                    model, values["status"], code, values["duration_ms"])
         observer = _observer.get()
         if observer is not None:
             observer(values)
+        else:
+            logger.warning("Intento de IA sin contexto de persistencia", extra={
+                **values, "event": "ai_attempt_untracked",
+            })
 
 
 async def persist_usage(values: dict[str, Any]) -> None:
@@ -61,19 +71,27 @@ async def tracked_to_thread(
     loop = asyncio.get_running_loop()
 
     def observe(values: dict[str, Any]) -> None:
+        record = {**values, "action": action, "task_id": task_id, "entity_id": entity_id}
+        logger.log(
+            logging.ERROR if values["status"] == "error" else logging.INFO,
+            "Intento de proveedor de IA finalizado",
+            extra={**record, "event": "ai_provider_attempt"},
+        )
         try:
             future = asyncio.run_coroutine_threadsafe(
-                persist_usage({
-                    **values, "action": action, "task_id": task_id, "entity_id": entity_id,
-                }),
+                persist_usage(record),
                 loop,
             )
             future.result(timeout=5)
         except Exception:
-            logger.exception("Could not save AI usage; action=%s task_id=%s", action, task_id)
+            logger.exception("No se pudo guardar el uso de IA", extra={
+                **record, "event": "ai_usage_persist_failed",
+            })
 
     token = _observer.set(observe)
+    context_token = _context.set({"action": action, "task_id": task_id, "entity_id": entity_id})
     try:
         return await asyncio.to_thread(fn, *args)
     finally:
+        _context.reset(context_token)
         _observer.reset(token)

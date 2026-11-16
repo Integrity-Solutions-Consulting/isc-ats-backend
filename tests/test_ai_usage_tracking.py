@@ -23,6 +23,7 @@ async def test_gemini_attempts_are_saved_with_context(monkeypatch):
 
     monkeypatch.setattr(usage_tracking, "persist_usage", persist)
     monkeypatch.setattr(settings, "gemini_api_key", "test")
+    monkeypatch.setattr(settings, "omniroute_base_url", "")
     monkeypatch.setattr(settings, "openrouter_api_key", "")
     monkeypatch.setattr(analysis_service, "_FALLBACK_MODELS", ["first", "second"])
     response = SimpleNamespace(
@@ -76,6 +77,54 @@ async def test_openrouter_usage_and_failure_are_recorded(monkeypatch):
             openrouter_client.call_openrouter, ["private CV"], action="cv_prefill"
         )
     assert saved[1]["status"] == "error" and saved[1]["error_code"] == "403"
+
+
+@pytest.mark.asyncio
+async def test_omniroute_events_and_persistence_have_matching_context(monkeypatch, caplog):
+    import logging
+
+    saved = []
+
+    async def persist(values):
+        saved.append(values)
+
+    monkeypatch.setattr(usage_tracking, "persist_usage", persist)
+    monkeypatch.setattr(settings, "omniroute_base_url", "https://router.example/v1")
+    monkeypatch.setattr(settings, "omniroute_api_key", "private-key")
+    monkeypatch.setattr(settings, "omniroute_model", "combo")
+    response = Mock(is_error=True, status_code=503)
+    client = MagicMock()
+    client.__enter__.return_value.post.return_value = response
+    monkeypatch.setattr(openrouter_client.httpx, "Client", lambda **kwargs: client)
+    with caplog.at_level(logging.INFO, logger=usage_tracking.__name__):
+        with pytest.raises(openrouter_client.OpenRouterError):
+            await usage_tracking.tracked_to_thread(
+                openrouter_client.call_omniroute, ["private CV"],
+                action="parse_candidate_cv", task_id=12, entity_id=34,
+            )
+    assert saved[0]["provider"] == "omniroute"
+    assert saved[0]["error_code"] == "503"
+    assert saved[0]["task_id"] == 12 and saved[0]["entity_id"] == 34
+    records = [r for r in caplog.records if getattr(r, "event", "").startswith("ai_provider")]
+    assert [r.event for r in records] == ["ai_provider_started", "ai_provider_attempt"]
+    assert all(r.provider == "omniroute" and r.action == "parse_candidate_cv" for r in records)
+    formatted = " ".join(JsonFormatter().format(r) for r in records)
+    assert "private-key" not in formatted and "private CV" not in formatted
+
+
+@pytest.mark.asyncio
+async def test_persist_usage_commits_database_row(monkeypatch):
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.commit = AsyncMock()
+    monkeypatch.setattr(usage_tracking, "async_session_factory", lambda: session)
+    await usage_tracking.persist_usage({
+        "action": "cv_prefill", "provider": "omniroute", "model": "combo", "status": "success",
+    })
+    row = session.add.call_args.args[0]
+    assert row.action == "cv_prefill" and row.provider == "omniroute" and row.model == "combo"
+    session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

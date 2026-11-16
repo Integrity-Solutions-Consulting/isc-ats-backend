@@ -17,6 +17,7 @@ class AiUsageLogRead(BaseModel):
 
     id: int
     action: str
+    provider: str | None = None
     model: str | None
     input_tokens: int | None
     output_tokens: int | None

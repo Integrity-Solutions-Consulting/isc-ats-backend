@@ -26,7 +26,7 @@ from pypdf import PdfReader
 import app.models_registry  # noqa: F401 — ensures all FK targets are registered
 from app.core.config import settings
 from app.core.database import async_session_factory
-from app.modules.ai.application.openrouter_client import call_openrouter
+from app.modules.ai.application.openrouter_client import call_omniroute, call_openrouter
 from app.modules.ai.infrastructure.usage_tracking import track_attempt, tracked_to_thread
 from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.applications_repository import ApplicationRepository
@@ -162,6 +162,13 @@ def _build_image_contents(images: list[bytes], vacancy: Vacancy) -> list[Any]:
 
 def _call_gemini(contents: list[Any]) -> dict:
     """Try each model in the fallback chain; raise on total failure."""
+    if settings.omniroute_configured:
+        try:
+            return call_omniroute(contents)
+        except Exception:
+            logger.warning("OmniRoute unavailable; switching to configured backup")
+            if not (settings.gemini_api_key or settings.openrouter_api_key):
+                raise
     if not settings.gemini_api_key:
         return call_openrouter(contents)
     client = genai.Client(api_key=settings.gemini_api_key)
@@ -252,7 +259,9 @@ async def analyze_application(
     """
     import asyncio
 
-    if not (settings.gemini_api_key or settings.openrouter_api_key):
+    if not (
+        settings.gemini_api_key or settings.openrouter_api_key or settings.omniroute_configured
+    ):
         if strict:
             raise ValueError("No AI provider is configured")
         logger.warning(

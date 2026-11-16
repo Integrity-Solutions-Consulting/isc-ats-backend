@@ -12,7 +12,10 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname, "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("task_id", "action", "entity_id", "attempt", "status", "error_code"):
+        for key in (
+            "task_id", "action", "entity_id", "attempt", "status", "error_code",
+            "provider", "model", "duration_ms", "input_tokens", "output_tokens", "event",
+        ):
             value = getattr(record, key, None)
             if value is not None:
                 data[key] = value
