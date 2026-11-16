@@ -9,6 +9,7 @@ from app.api_router import api_router
 from app.core.config import settings
 from app.core.login_throttle import InMemoryLoginThrottle, build_login_throttle
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
+from app.core.structured_logging import configure_app_logging
 from app.core.task_queue import InlineTaskQueue, build_task_queue
 from app.core.token_denylist import InMemoryTokenDenylist, build_token_denylist
 from app.core.validation_errors import register_validation_error_handler
@@ -19,6 +20,7 @@ from app.modules.storage.infrastructure.minio_client import init_minio
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run startup tasks before the application starts serving requests."""
+    configure_app_logging()
     # Ensure the MinIO bucket exists — safe to call multiple times (idempotent).
     init_minio()
 

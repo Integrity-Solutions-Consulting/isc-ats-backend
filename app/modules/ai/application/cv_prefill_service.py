@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.models_registry  # noqa: F401
 from app.core.config import settings
+from app.modules.ai.application.openrouter_client import call_omniroute, call_openrouter
+from app.modules.ai.infrastructure.usage_tracking import track_attempt, tracked_to_thread
 from app.modules.org.infrastructure.models import Parameter
 from app.modules.storage.infrastructure.minio_client import minio_client
 from app.modules.storage.infrastructure.models import File
@@ -141,30 +143,50 @@ def _build_text_contents(cv_text: str) -> list[Any]:
 
 
 def _build_image_contents(images: list[bytes]) -> list[Any]:
-    parts: list[Any] = [_PROMPT_HEADER + _JSON_SCHEMA + "\n\n## CV del candidato (páginas como imágenes)\n"]
+    parts: list[Any] = [
+        _PROMPT_HEADER + _JSON_SCHEMA + "\n\n## CV del candidato (páginas como imágenes)\n"
+    ]
     for img_bytes in images:
         parts.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
     return parts
 
 
 def _call_gemini(contents: list[Any]) -> dict:
+    if settings.omniroute_configured:
+        try:
+            return call_omniroute(contents)
+        except Exception:
+            logger.warning("OmniRoute unavailable; switching to configured backup")
+            if not (settings.gemini_api_key or settings.openrouter_api_key):
+                raise
+    if not settings.gemini_api_key:
+        return call_openrouter(contents)
     client = genai.Client(api_key=settings.gemini_api_key)
     last_exc: Exception | None = None
     for model in _FALLBACK_MODELS:
         try:
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            )
-            return json.loads(response.text)
+            with track_attempt(model) as attempt:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                usage = getattr(response, "usage_metadata", None)
+                attempt.input_tokens = getattr(usage, "prompt_token_count", None)
+                attempt.output_tokens = getattr(usage, "candidates_token_count", None)
+                return json.loads(response.text)
         except Exception as exc:
             status_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-            retryable = status_code in _RETRYABLE_CODES or any(str(c) in str(exc) for c in _RETRYABLE_CODES)
-            logger.warning("Prefill model %s failed (%s) — %s", model, status_code, exc)
+            retryable = status_code in _RETRYABLE_CODES or any(
+                str(c) in str(exc) for c in _RETRYABLE_CODES
+            )
+            logger.warning("Prefill model %s failed code=%s", model, status_code)
             last_exc = exc
             if not retryable:
                 break
+    if settings.openrouter_api_key:
+        logger.warning("Gemini unavailable; switching to OpenRouter")
+        return call_openrouter(contents)
     raise RuntimeError(f"All prefill models failed. Last error: {last_exc}") from last_exc
 
 
@@ -213,13 +235,15 @@ async def prefill_from_bytes(pdf_bytes: bytes, session: AsyncSession) -> dict:
     The PDF is processed entirely in memory — nothing is persisted. This is the
     path used by onboarding so a candidate's CV is never stored until they
     finish registration (LOPDP data-minimisation). Returns an empty dict when
-    Gemini is not configured or any unrecoverable error occurs — callers should
+    No AI provider is configured or any unrecoverable error occurs — callers should
     handle the empty case gracefully rather than failing the onboarding flow.
     """
     import asyncio
 
-    if not settings.gemini_api_key:
-        logger.warning("GEMINI_API_KEY not set — skipping CV prefill")
+    if not (
+        settings.gemini_api_key or settings.openrouter_api_key or settings.omniroute_configured
+    ):
+        logger.warning("No AI API key set — skipping CV prefill")
         return {}
 
     # ── AI extraction (blocking I/O + AI call run in threads) ────────────────
@@ -234,7 +258,7 @@ async def prefill_from_bytes(pdf_bytes: bytes, session: AsyncSession) -> dict:
                 return {}
             contents = _build_image_contents(images)
 
-        extracted: dict = await asyncio.to_thread(_call_gemini, contents)
+        extracted: dict = await tracked_to_thread(_call_gemini, contents, action="cv_prefill")
     except Exception:
         logger.exception("CV prefill failed during processing")
         return {}

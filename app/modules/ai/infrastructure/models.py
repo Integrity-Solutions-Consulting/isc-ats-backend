@@ -80,7 +80,13 @@ class AiUsageLog(Base, AuditMixin, SoftDeleteMixin):
 
     id: Mapped[int] = mapped_column(Identity(), primary_key=True)
     action: Mapped[str] = mapped_column(String(100))
+    provider: Mapped[str | None] = mapped_column(String(40), default=None)
     model: Mapped[str | None] = mapped_column(String(100), default=None)
     input_tokens: Mapped[int | None] = mapped_column(default=None)
     output_tokens: Mapped[int | None] = mapped_column(default=None)
     cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), default=None)
+    status: Mapped[str | None] = mapped_column(String(20), default=None)
+    error_code: Mapped[str | None] = mapped_column(String(40), default=None)
+    duration_ms: Mapped[int | None] = mapped_column(default=None)
+    task_id: Mapped[int | None] = mapped_column(default=None)
+    entity_id: Mapped[int | None] = mapped_column(default=None)

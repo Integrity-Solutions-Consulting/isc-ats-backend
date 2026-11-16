@@ -159,6 +159,9 @@ class CvPrefillResponse(BaseModel):
 
 
 class CandidateAppliedVacancy(BaseModel):
+    application_id: int | None = None
+    applied_at: datetime | None = None
+    salary_expectation: Decimal | None = None
     id: int
     title: str
     status: str | None = None

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import async_session_factory
 from app.core.task_queue import TaskQueue, register_task
 from app.modules.ai.infrastructure.models import AiTask
+from app.modules.ai.infrastructure.usage_tracking import persist_usage
 from app.modules.recruitment.infrastructure.application_models import Application
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
 
@@ -123,6 +124,10 @@ async def run_ai_task(task_id: int, token: str) -> None:
         await session.commit()
 
     status, error_code = "completed", None
+    failure_code = None
+    logger.info("Tarea de IA iniciada", extra={
+        "task_id": task_id, "action": action, "entity_id": entity_id, "attempt": attempts,
+    })
     try:
         async with asyncio.timeout(240):
             if action == "parse_candidate_cv":
@@ -151,10 +156,22 @@ async def run_ai_task(task_id: int, token: str) -> None:
     except Exception as exc:
         logger.exception("AI task %d attempt %d failed", task_id, attempts)
         status, error_code = failure_policy(exc, attempts)
+        cause: BaseException | None = exc
+        while cause:
+            code = getattr(cause, "code", None) or getattr(cause, "status_code", None)
+            if code:
+                failure_code = str(code)[:40]
+                break
+            cause = cause.__cause__
+        failure_code = failure_code or type(exc).__name__[:40]
 
     async with async_session_factory() as session:
         task = await session.scalar(select(AiTask).where(AiTask.id == task_id).with_for_update())
         if not task or task.lease_token != token:
+            logger.info("Tarea de IA ya finalizada o reemplazada", extra={
+                "task_id": task_id, "action": action,
+                "status": task.status if task else "missing",
+            })
             return
         task.status, task.error_code = status, error_code
         task.lease_token = None
@@ -162,6 +179,19 @@ async def run_ai_task(task_id: int, token: str) -> None:
         if status == "pending":
             task.next_attempt_at = utcnow() + timedelta(seconds=RETRY_SECONDS[attempts - 1])
         await session.commit()
+
+    logger.info("Tarea de IA finalizada", extra={
+        "task_id": task_id, "action": action, "status": status,
+        "attempt": attempts, "error_code": failure_code or error_code,
+    })
+    if failure_code:
+        try:
+            await persist_usage({
+                "action": f"{action}:task", "status": "error", "error_code": failure_code,
+                "task_id": task_id, "entity_id": entity_id,
+            })
+        except Exception:
+            logger.exception("No se pudo guardar el fallo de tarea %s", task_id)
 
 
 class SupersededCvError(Exception):
@@ -227,6 +257,7 @@ async def dispatch_once(queue: TaskQueue) -> None:
     for task_id, token in deliveries:
         try:
             await queue.enqueue("run_ai_task", task_id, token)
+            logger.info("Tarea de IA encolada", extra={"task_id": task_id})
         except Exception:
             logger.exception("Queue unavailable; AI task %d remains saved", task_id)
             async with async_session_factory() as session:

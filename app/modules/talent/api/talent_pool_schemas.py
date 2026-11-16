@@ -16,6 +16,7 @@ class TalentPoolRead(BaseModel):
     candidate_id: int
     source_vacancy_id: int | None = None
     source_vacancy_title: str | None = None
+    match_score: Decimal | None = None
     is_active: bool
     created_at: datetime
     created_by: int | None = None

@@ -24,6 +24,8 @@ from pypdf import PdfReader
 import app.models_registry  # noqa: F401
 from app.core.config import settings
 from app.core.database import async_session_factory
+from app.modules.ai.application.openrouter_client import call_omniroute, call_openrouter
+from app.modules.ai.infrastructure.usage_tracking import track_attempt, tracked_to_thread
 from app.modules.recruitment.infrastructure.candidate_models import Candidate
 from app.modules.storage.infrastructure.minio_client import minio_client
 from app.modules.storage.infrastructure.models import File
@@ -243,25 +245,41 @@ def _build_focused_contents(cv_text: str, images: list[bytes]) -> list[Any]:
 
 
 def _call_gemini(contents: list[Any]) -> dict:
+    if settings.omniroute_configured:
+        try:
+            return _normalise_parsed_data(call_omniroute(contents))
+        except Exception:
+            logger.warning("OmniRoute unavailable; switching to configured backup")
+            if not (settings.gemini_api_key or settings.openrouter_api_key):
+                raise
+    if not settings.gemini_api_key:
+        return _normalise_parsed_data(call_openrouter(contents))
     client = genai.Client(api_key=settings.gemini_api_key)
     last_exc: Exception | None = None
     for model in _FALLBACK_MODELS:
         try:
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            )
-            return _normalise_parsed_data(json.loads(response.text))
+            with track_attempt(model) as attempt:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                usage = getattr(response, "usage_metadata", None)
+                attempt.input_tokens = getattr(usage, "prompt_token_count", None)
+                attempt.output_tokens = getattr(usage, "candidates_token_count", None)
+                return _normalise_parsed_data(json.loads(response.text))
         except Exception as exc:
             status_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
             retryable = status_code in _RETRYABLE_CODES or any(
                 str(c) in str(exc) for c in _RETRYABLE_CODES
             )
-            logger.warning("Model %s failed (%s) — %s", model, status_code, exc)
+            logger.warning("Model %s failed code=%s", model, status_code)
             last_exc = exc
             if not retryable:
                 break
+    if settings.openrouter_api_key:
+        logger.warning("Gemini unavailable; switching to OpenRouter")
+        return _normalise_parsed_data(call_openrouter(contents))
     raise RuntimeError(f"All models failed. Last error: {last_exc}") from last_exc
 
 
@@ -319,10 +337,12 @@ async def parse_candidate_cv(
     """
     import asyncio
 
-    if not settings.gemini_api_key:
+    if not (
+        settings.gemini_api_key or settings.openrouter_api_key or settings.omniroute_configured
+    ):
         if strict:
-            raise ValueError("Gemini is not configured")
-        logger.warning("GEMINI_API_KEY not set — skipping CV parse for candidate %d", candidate_id)
+            raise ValueError("No AI provider is configured")
+        logger.warning("No AI API key set — skipping CV parse for candidate %d", candidate_id)
         return None
 
     # ── Phase 1: read from DB ────────────────────────────────────────────────
@@ -352,7 +372,10 @@ async def parse_candidate_cv(
     try:
         pdf_bytes: bytes = await asyncio.to_thread(_download_cv, bucket, stored_key)
 
-        result: dict[str, Any] = await asyncio.to_thread(_parse_comprehensively, pdf_bytes)
+        result: dict[str, Any] = await tracked_to_thread(
+            _parse_comprehensively, pdf_bytes, action="parse_candidate_cv",
+            task_id=task_id, entity_id=candidate_id,
+        )
     except Exception:
         if strict:
             raise
@@ -384,14 +407,15 @@ async def parse_candidate_cv(
 
 async def parse_cv_bytes(pdf_bytes: bytes) -> dict[str, Any] | None:
     """Parse a CV without requiring a persisted candidate or storing results."""
-    import asyncio
 
-    if not settings.gemini_api_key:
-        logger.warning("GEMINI_API_KEY not set — skipping direct CV parse")
+    if not (
+        settings.gemini_api_key or settings.openrouter_api_key or settings.omniroute_configured
+    ):
+        logger.warning("No AI API key set — skipping direct CV parse")
         return None
 
     try:
-        return await asyncio.to_thread(_parse_comprehensively, pdf_bytes)
+        return await tracked_to_thread(_parse_comprehensively, pdf_bytes, action="parse_cv_direct")
     except Exception:
         logger.exception("Direct CV parse failed")
         return None
